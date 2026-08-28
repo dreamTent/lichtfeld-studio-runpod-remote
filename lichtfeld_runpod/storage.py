@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+import tarfile
 from ftplib import FTP, error_perm
 from pathlib import Path
 from urllib.parse import quote
 
 from .config import StorageConfig
+from .host import restrict_secret_file, which_tool, write_text_lf
 from .log import log
 
 
@@ -64,12 +66,8 @@ def curl_url(cfg: StorageConfig, remote_path: str) -> str:
 
 
 def write_netrc(path: Path, cfg: StorageConfig) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f"machine {cfg.host} login {cfg.user} password {cfg.password}\n",
-        encoding="utf-8",
-    )
-    path.chmod(0o600)
+    write_text_lf(path, f"machine {cfg.host} login {cfg.user} password {cfg.password}\n")
+    restrict_secret_file(path)
 
 
 def verify_uploaded(cfg: StorageConfig, remote_dir: str) -> list[str]:
@@ -134,7 +132,7 @@ def curl_put(cfg: StorageConfig, local: Path, remote_path: str, netrc: Path) -> 
     url = curl_url(cfg, remote_path)
     extra = ["--ftp-pasv"] if cfg.protocol == "ftp" else []
     cmd = [
-        "curl",
+        which_tool("curl"),
         "--fail",
         "--netrc-file",
         str(netrc),
@@ -159,7 +157,7 @@ def curl_get_file(cfg: StorageConfig, remote_path: str, local: Path, netrc: Path
     url = curl_url(cfg, remote_path)
     extra = ["--ftp-pasv"] if cfg.protocol == "ftp" else []
     cmd = [
-        "curl",
+        which_tool("curl"),
         "-C",
         "-",
         "--fail",
@@ -190,10 +188,8 @@ def tar_directory(src: Path, dest: Path) -> Path:
         return dest
     if not src.is_dir():
         raise FileNotFoundError(f"dataset path is not a directory: {src}")
-    subprocess.run(
-        ["tar", "-cf", str(dest), "-C", str(src.parent), src.name],
-        check=True,
-    )
+    with tarfile.open(dest, "w") as tf:
+        tf.add(src, arcname=src.name)
     return dest
 
 

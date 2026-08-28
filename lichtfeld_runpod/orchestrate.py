@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .config import AppConfig
+from .host import restrict_secret_file, write_text_lf
 from .log import log
 from .remote_job import render_job_script
 from .runpod import RunpodClient, RunpodError, ssh_endpoint
@@ -126,21 +127,19 @@ def inject_and_start(
     """Copy credentials + job script and start it under nohup. The pod owns the rest."""
     netrc = run_dir / "netrc"
     write_netrc(netrc, cfg.storage)
+    api_file = run_dir / "runpod_api"
+    write_text_lf(api_file, cfg.runpod.api_key)
+    restrict_secret_file(api_file)
+
     ssh.run("mkdir -p /workspace/logs /workspace/state /root")
     ssh.put(netrc, "/root/.netrc")
-    ssh.run("chmod 600 /root/.netrc")
-
-    api_file = run_dir / "runpod_api"
-    api_file.write_text(cfg.runpod.api_key, encoding="utf-8")
-    api_file.chmod(0o600)
     ssh.put(api_file, "/root/.runpod_api")
-    ssh.run("chmod 600 /root/.runpod_api")
 
     script_text = render_job_script(cfg, build_bytes, dataset_bytes, pod_id=pod_id)
     local_script = run_dir / "remote_job.sh"
-    local_script.write_text(script_text, encoding="utf-8")
+    write_text_lf(local_script, script_text)
     ssh.put(local_script, "/workspace/remote_job.sh")
-    ssh.run("chmod +x /workspace/remote_job.sh")
+    ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_job.sh")
 
     log("job", "starting remote pipeline (autonomous)")
     ssh.run(

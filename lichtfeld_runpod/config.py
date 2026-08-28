@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .host import restrict_secret_file, write_text_lf
+
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 EXAMPLE_YAML = Path(__file__).resolve().parent.parent / "config.example.yaml"
@@ -274,8 +276,8 @@ def write_env_file(path: Path, updates: dict[str, str]) -> None:
             continue
         lines.append(f"{key}={existing[key]}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    path.chmod(0o600)
+    write_text_lf(path, "\n".join(lines) + "\n")
+    restrict_secret_file(path)
     for key, value in updates.items():
         if value:
             os.environ[key] = value

@@ -7,15 +7,27 @@ The usual way to run this is the **local dashboard**. A one-shot CLI job from `c
 ## What you need
 
 - Python 3.11+
-- `ssh` and `scp` on this machine
+- `ssh`, `scp`, and `ssh-keygen` on this machine (OpenSSH)
+- `curl` on this machine (used for FTP/SFTP transfers)
 - A RunPod API key with full permissions
 - An FTP or SFTP server with read/write access (for example a Hetzner Storage Box)
 
+On **Windows**, enable **OpenSSH Client** under Settings → Apps → Optional features. Windows 10+ already includes `curl.exe`. Use PowerShell, not Git Bash, so the app finds Microsoft OpenSSH rather than MSYS `ssh`.
+
 ## Setup
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+python -m lichtfeld_runpod --init
+```
+
+Linux / macOS:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -e .
 python3 -m lichtfeld_runpod --init
 ```
@@ -34,9 +46,11 @@ An SSH key is created at `~/.ssh/runpod_ed25519` if it is missing, and registere
 
 ## Start the dashboard
 
-```bash
-python3 -m lichtfeld_runpod --ui
+```powershell
+python -m lichtfeld_runpod --ui
 ```
+
+Linux / macOS: `python3 -m lichtfeld_runpod --ui`.
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Optional: `--host` and `--port` (defaults `127.0.0.1` and `8765`).
 

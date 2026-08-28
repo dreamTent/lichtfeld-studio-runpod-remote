@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from .config import ConfigError, load_config
+from .host import restrict_secret_file
 from .log import log
 from .orchestrate import run_job
 
@@ -81,7 +82,7 @@ def _init_files(here: Path, examples: Path) -> None:
             continue
         shutil.copy(src, dest)
         if dest_name == ".env":
-            dest.chmod(0o600)
+            restrict_secret_file(dest)
         log("init", f"wrote {dest}")
     log("init", "edit config.yaml and .env, then: python3 -m lichtfeld_runpod --config config.yaml")
     log("init", "or start the dashboard: python3 -m lichtfeld_runpod --ui")
