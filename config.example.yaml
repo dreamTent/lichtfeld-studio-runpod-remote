@@ -1,0 +1,57 @@
+# Copy to config.yaml and edit. Secrets belong in .env (${VAR} below).
+# Run:  python3 -m lichtfeld_runpod --config config.yaml
+
+job:
+  # Used in the RunPod name and as the default FTP result folder suffix.
+  name: lichtfeld-job
+  # Poll remote logs this often while downloading / training.
+  progress_interval_seconds: 15
+  # Shut down the GPU pod after a successful upload (saves money).
+  terminate_when_done: true
+
+runpod:
+  api_key: ${RUNPOD_API_KEY}
+  # Exact RunPod gpuTypeId. One dedicated GPU — not MIG, not multi-GPU packs.
+  gpu: "NVIDIA L40S"
+  gpu_count: 1
+  # SECURE | COMMUNITY | AUTO  (AUTO tries Secure, then Community)
+  cloud: SECURE
+  image: runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
+  container_disk_gb: 50
+  volume_gb: 150
+  volume_mount: /workspace
+  # Optional CUDA filter for placement. Empty = no filter.
+  allowed_cuda_versions: ["12.8", "12.9", "13.0"]
+
+ssh:
+  identity_file: ~/.ssh/runpod_ed25519
+  public_key_file: ~/.ssh/runpod_ed25519.pub
+
+# Hetzner Storage Box (or any FTP/SFTP server). Transfers use curl+FTP by default
+# because Python ftplib was ~4x slower on large archives.
+storage:
+  host: ${SFTP_HOST}
+  user: ${SFTP_USER}
+  password: ${SFTP_PASSWORD}
+  # ftp is port 21 (curl). sftp is port 22 (also curl).
+  protocol: ${STORAGE_PROTOCOL:-ftp}
+  ftp_port: 21
+  sftp_port: 22
+  # Remote paths as they appear on the server (spaces are fine).
+  dataset_archive: "path/to/dataset.tar"
+  build_archive: "lichtfeld-builds/lichtfeld-0.5.3-l40s-sm89-260828/lichtfeld-0.5.3-l40s-sm89.tar.gz"
+  # Folder on the server where PLYs, logs, and REPORT.md are uploaded.
+  result_dir: "lichtfeld-results/lichtfeld-job"
+
+lichtfeld:
+  # Config JSON inside the extracted dataset, relative to the COLMAP scene root
+  # (the folder that contains images/ and sparse/). Empty string = do not pass --config.
+  config: ""
+  max_cap: 10000000
+  enable_sparsity: true
+  gut: true
+  headless: true
+  extra_args: []
+  # Optional overrides (omit or leave null to use the binary/config defaults):
+  # iterations: 30000
+  # strategy: mrnf
