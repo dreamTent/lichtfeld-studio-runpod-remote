@@ -20,7 +20,7 @@ todo:
 - [ ] implement a build pipeline (later)
 - [x] add option to terminate pod (Discard pod in the dashboard)
 - [x] add an option to archive or delete a job (the listing not the data)
-- [ ] create setup and start script for windows so users just have to execute a bat file
+- [x] create setup and start script for windows so users just have to execute a bat file
 - [ ] create a setup and start script for linux users (debian/ubuntu)
 - [ ] check app compatible with windows and linux (debian/ubuntu)
 - [ ] i want to be able to create multiple jobs with the same dataset with diffferent config files. this should also be compatible with uploading. give the option to select a different jobs upload as dataset, and wait for it to finish before starting

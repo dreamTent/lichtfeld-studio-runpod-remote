@@ -1,8 +1,14 @@
 # LichtFeld RunPod runner
 
+This project is work in progress.  
+
+The buildpipeline for lichtfeld studio for linux is still missing, you have to prepare it yourself or ask cursor or claude code to do it for you.
+
 Start a RunPod GPU, restore a LichtFeld Studio build, train headless, and upload results plus logs to your FTP/SFTP server. Pods terminate themselves after a successful upload unless you turn that off.
 
 The usual way to run this is the **local dashboard**. A one-shot CLI job from `config.yaml` still works.
+
+<img src="assets/Screenshot%202026-08-29%20215804.png" alt="LichtFeld RunPod runner dashboard" width="800">
 
 ## What you need
 
@@ -16,6 +22,10 @@ The usual way to run this is the **local dashboard**. A one-shot CLI job from `c
 On **Windows**, enable **OpenSSH Client** under Settings → Apps → Optional features. Windows 10+ already includes `curl.exe`. Use PowerShell, not Git Bash, so the app finds Microsoft OpenSSH rather than MSYS `ssh`.
 
 ## Setup
+
+On **Windows**, double-click `start.bat`. It creates `.venv`, installs the app, writes `config.yaml` / `.env` if they are missing, and opens the dashboard. Use `setup.bat` if you only want to prepare the environment (for example after a `git pull`).
+
+Manual setup (PowerShell):
 
 ```powershell
 python -m venv .venv
@@ -93,6 +103,8 @@ An optional LichtFeld JSON config lives **inside** the scene (next to `images/` 
 Created on upload. The default folder is `lichtfeld-results/<job-name>-<job-id>` unless you set a different path. Contents are listed under [What gets uploaded](#what-gets-uploaded).
 
 ## Start the dashboard
+
+On **Windows**, double-click `start.bat` (or run it from cmd). Leave that window open while you use the app.
 
 ```powershell
 python -m lichtfeld_runpod --ui
