@@ -215,10 +215,79 @@ class JobManager:
         if job is None:
             raise KeyError(job_id)
         self._refresh_pods()
+        if job.phase == "complete":
+            return job
+        cfg = self._cfg_for(job)
+        if job.ssh_host or self._ssh.get(job.id):
+            self._probe_ssh(job, cfg)
+        job = self.store.get(job_id) or job
         if job.phase != "complete" and job.result_dir:
-            cfg = self._cfg_for(job)
             self._maybe_presumed_complete(job, cfg)
         return self.store.get(job_id) or job
+
+    def _ssh_session(self, job: Job, cfg: AppConfig) -> Ssh | None:
+        existing = self._ssh.get(job.id)
+        if existing is not None:
+            return existing
+        if not (job.ssh_host and job.ssh_port):
+            return None
+        ssh_config = self.store.workdir(job.id) / "ssh_config"
+        write_ssh_config(ssh_config, job.ssh_host, job.ssh_port, cfg.ssh.identity_file)
+        ssh = Ssh(ssh_config)
+        self._ssh[job.id] = ssh
+        return ssh
+
+    def _probe_ssh(self, job: Job, cfg: AppConfig) -> bool:
+        ssh = self._ssh_session(job, cfg)
+        if ssh is None:
+            return False
+        try:
+            fields = poll_remote_state(ssh, timeout=20)
+        except Exception as e:
+            log("ssh", f"{job.id} reload poll failed: {e}")
+            self._note_connection_error(job)
+            return False
+        job = self.store.get(job.id) or job
+        self._on_poll_ok(job, fields, cfg, ssh)
+        return True
+
+    def _note_connection_error(self, job: Job) -> Job:
+        stored = self.store.get(job.id) or job
+        stored.connection_errors = int(stored.connection_errors or 0) + 1
+        stored.message = _with_connection_error(stored.message)
+        self._save(stored)
+        return stored
+
+    def _on_poll_ok(self, job: Job, fields: dict[str, str], cfg: AppConfig, ssh: Ssh | None) -> bool:
+        """Apply a successful SSH poll. Returns True if the caller should stop watching."""
+        job.connection_errors = 0
+        job.last_ssh_ok = time.time()
+        job.stage = fields.get("STAGE", job.stage)
+        train = fields.get("TRAIN", "")
+        job.message = format_progress(job.stage, fields, train, job.build_bytes, job.dataset_bytes)
+        if ssh is not None:
+            try:
+                job.log_tail = fetch_log_tail(ssh)
+            except Exception:
+                pass
+        if fields.get("DONE") == "1" or job.stage == "done":
+            self._finish_ok(job, cfg)
+            return True
+        if fields.get("ERR") == "1":
+            job.phase = "error"
+            job.error = "remote pipeline failed"
+            job.message = job.error
+            if ssh is not None:
+                try:
+                    job.log_tail = fetch_log_tail(ssh)
+                except Exception:
+                    pass
+            self._save(job)
+            return True
+        if job.phase != "running":
+            job.phase = "running"
+        self._save(job)
+        return False
 
     def _maybe_presumed_complete(self, job: Job, cfg: AppConfig) -> bool:
         if job.phase == "complete":
@@ -324,7 +393,10 @@ class JobManager:
             job = self.store.get(job_id)
             if job and job.phase not in {"complete"} and job_id not in self._dropped:
                 msg = _with_connection_error(job.message) if isinstance(e, SshError) else str(e)
-                self._update(job, phase="error", error=str(e), message=msg)
+                extra: dict[str, Any] = {}
+                if isinstance(e, SshError):
+                    extra["connection_errors"] = int(job.connection_errors or 0) + 1
+                self._update(job, phase="error", error=str(e), message=msg, **extra)
 
     def _upload_local_dataset(self, job: Job, cfg: AppConfig, run_dir: Path, netrc: Path) -> None:
         self._update(job, phase="uploading_dataset", message="packing dataset")
@@ -466,36 +538,13 @@ class JobManager:
             try:
                 fields = poll_remote_state(ssh)
                 fails = 0
-                job.last_ssh_ok = time.time()
-                job.stage = fields.get("STAGE", job.stage)
-                train = fields.get("TRAIN", "")
-                job.message = format_progress(job.stage, fields, train, job.build_bytes, job.dataset_bytes)
-                try:
-                    job.log_tail = fetch_log_tail(ssh)
-                except Exception:
-                    pass
-                if fields.get("DONE") == "1" or job.stage == "done":
-                    self._finish_ok(job, cfg)
+                if self._on_poll_ok(job, fields, cfg, ssh):
                     return
-                if fields.get("ERR") == "1":
-                    job.phase = "error"
-                    job.error = "remote pipeline failed"
-                    job.message = job.error
-                    try:
-                        job.log_tail = fetch_log_tail(ssh)
-                    except Exception:
-                        pass
-                    self._save(job)
-                    return
-                if job.phase != "running":
-                    job.phase = "running"
-                self._save(job)
             except Exception as e:
                 fails += 1
                 log("ssh", f"{job.id} poll failed: {e}")
-                job.message = _with_connection_error(job.message)
-                self._save(job)
-                if ftp_check_due(fails) and self._maybe_presumed_complete(job, cfg):
+                job = self._note_connection_error(job)
+                if ftp_check_due(job.connection_errors) and self._maybe_presumed_complete(job, cfg):
                     return
                 if job.pod_id and not client.pod_running(job.pod_id):
                     if self._maybe_presumed_complete(job, cfg):
@@ -513,6 +562,7 @@ class JobManager:
     def _finish_ok(self, job: Job, cfg: AppConfig, *, presumed: bool = False) -> None:
         job.phase = "complete"
         job.error = None
+        job.connection_errors = 0
         done = PRESUMED_COMPLETE_MESSAGE if presumed else "complete"
         job.message = done
         if job.auto_download:
@@ -533,7 +583,13 @@ CONNECTION_ERROR_NOTE = "connection error"
 
 
 def _with_connection_error(message: str) -> str:
-    base = (message or "").removesuffix(f" · {CONNECTION_ERROR_NOTE}").removesuffix(CONNECTION_ERROR_NOTE).rstrip(" ·")
+    base = message or ""
+    marker = f" · {CONNECTION_ERROR_NOTE}"
+    idx = base.find(marker)
+    if idx >= 0:
+        base = base[:idx]
+    elif base.strip() == CONNECTION_ERROR_NOTE or base.startswith(f"{CONNECTION_ERROR_NOTE} ·"):
+        base = ""
     if base:
         return f"{base} · {CONNECTION_ERROR_NOTE}"
     return CONNECTION_ERROR_NOTE

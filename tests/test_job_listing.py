@@ -36,6 +36,12 @@ class JobListingTests(unittest.TestCase):
         restored = Job.from_dict(data)
         self.assertFalse(restored.archived)
 
+    def test_connection_errors_defaults_zero_on_old_records(self) -> None:
+        data = _job().to_dict()
+        data.pop("connection_errors", None)
+        restored = Job.from_dict(data)
+        self.assertEqual(restored.connection_errors, 0)
+
     def test_delete_removes_listing_not_results_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

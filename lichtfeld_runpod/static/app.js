@@ -6,6 +6,8 @@ const state = {
   selected: null, // { kind: 'job'|'pod', id }
   data: { jobs: [], pods: [] },
   listFilter: "current",
+  reloading: null,
+  reloadFlash: null,
 };
 
 function showView(name) {
@@ -88,11 +90,41 @@ function mergedRows() {
   return rows;
 }
 
+function formatDateTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(Number(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${date} ${time}`;
+}
+
+function connectionErrorNote(n) {
+  const c = Number(n) || 0;
+  if (c <= 0) return "";
+  return c === 1 ? " (1 connection error)" : ` (${c} connection errors)`;
+}
+
+function lastUpdateLabel(job, checking) {
+  if (checking) return "last update: checking…";
+  const when = formatDateTime(job?.last_ssh_ok);
+  const base = when === "—" ? "last update: —" : `last update: ${when}`;
+  return base + connectionErrorNote(job?.connection_errors);
+}
+
+function lastUpdateValue(job, checking) {
+  if (checking) return "checking…";
+  const when = formatDateTime(job?.last_ssh_ok);
+  return when + connectionErrorNote(job?.connection_errors);
+}
+
 function rowSubtitle(row) {
   const job = row.job;
   const pod = row.pod;
   if (job) {
-    const bits = [job.message || job.phase];
+    const checking = state.reloading === job.id;
+    const bits = [job.message || job.phase, lastUpdateLabel(job, checking)];
     if (job.gpu) bits.push(job.gpu);
     return bits.join(" · ");
   }
@@ -109,6 +141,8 @@ function renderLists() {
   for (const row of rows) {
     const li = document.createElement("li");
     if (state.selected?.kind === row.kind && state.selected.id === row.id) li.classList.add("selected");
+    if (row.job && state.reloading === row.job.id) li.classList.add("reloading");
+    if (row.job && state.reloadFlash === row.job.id) li.classList.add("reload-flash");
     li.append(orb(row.color));
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -148,6 +182,8 @@ function renderDetail() {
   const kv = [];
   if (job) {
     kv.push(["Status", job.message || job.phase || "—"]);
+    const checking = state.reloading === job.id;
+    kv.push(["Last update", lastUpdateValue(job, checking), checking ? "checking" : state.reloadFlash === job.id ? "flash" : ""]);
     kv.push(["Stage", job.stage || "—"]);
     kv.push(["GPU", `${job.gpu || "—"} / ${job.cloud || "—"}`]);
     kv.push(["Pod", job.pod_id || pod?.id || "—"]);
@@ -166,10 +202,12 @@ function renderDetail() {
   const log = job?.log_tail || job?.message || "";
   const actions = job
     ? `<div class="detail-actions">
-        <p class="note">Reload checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay.</p>
+        <p class="note">Reload probes SSH and checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay.</p>
         ${
           job.phase !== "complete"
-            ? `<button type="button" data-act="reload">Reload</button>`
+            ? `<button type="button" data-act="reload"${state.reloading === job.id ? " disabled" : ""}>${
+                state.reloading === job.id ? "Reloading…" : "Reload"
+              }</button>`
             : ""
         }
         ${
@@ -182,7 +220,9 @@ function renderDetail() {
     : "";
   box.innerHTML = `
     <h3>${esc(title)}</h3>
-    <div class="kv">${kv.map(([k, v]) => `<span>${esc(k)}</span><b>${esc(v)}</b>`).join("")}</div>
+    <div class="kv">${kv
+      .map(([k, v, cls]) => `<span>${esc(k)}</span><b${cls ? ` class="${cls}"` : ""}>${esc(v)}</b>`)
+      .join("")}</div>
     ${actions}
     <pre class="log">${esc(log)}</pre>
   `;
@@ -193,14 +233,23 @@ function renderDetail() {
 }
 
 async function reloadJob(jobId) {
-  const btn = document.querySelector("[data-act=reload]");
-  if (btn) btn.disabled = true;
+  state.reloading = jobId;
+  renderLists();
   try {
     await api(`/api/jobs/${jobId}/reload`, { method: "POST" });
     applySnapshot(await api("/api/state"));
+    state.reloadFlash = jobId;
+    setTimeout(() => {
+      if (state.reloadFlash === jobId) {
+        state.reloadFlash = null;
+        renderLists();
+      }
+    }, 1400);
   } catch (err) {
     alert(err.message);
-    if (btn) btn.disabled = false;
+  } finally {
+    state.reloading = null;
+    renderLists();
   }
 }
 

@@ -51,6 +51,7 @@ class Job:
     error: str | None = None
     log_tail: str = ""
     last_ssh_ok: float | None = None
+    connection_errors: int = 0
     created_at: float = 0.0
     updated_at: float = 0.0
     local_results: str = ""
