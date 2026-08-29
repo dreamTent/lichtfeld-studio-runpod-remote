@@ -198,18 +198,31 @@ class RunpodClient:
         out.sort(key=lambda x: str(x["name"]).lower())
         return out
 
-    def wait_ssh(self, pod_id: str, timeout: int = 300) -> tuple[str, int]:
-        deadline = time.time() + timeout
+    def wait_ssh(
+        self,
+        pod_id: str,
+        *,
+        should_stop: Any = None,
+    ) -> tuple[str, int] | None:
         i = 0
-        while time.time() < deadline:
-            pod = self.get_pod(pod_id)
+        while True:
+            try:
+                pod = self.get_pod(pod_id)
+            except RunpodError as e:
+                log("runpod", f"[{i}] pod lookup failed: {e}")
+                i += 1
+                if should_stop and should_stop(i):
+                    return None
+                time.sleep(5)
+                continue
             endpoint = ssh_endpoint(pod)
             log("runpod", f"[{i}] status={pod.get('status')} ssh={endpoint}")
             if endpoint:
                 return endpoint
-            time.sleep(5)
             i += 1
-        raise RunpodError("timeout waiting for pod SSH")
+            if should_stop and should_stop(i):
+                return None
+            time.sleep(5)
 
     def terminate(self, pod_id: str) -> None:
         status, body = self.request("DELETE", f"https://rest.runpod.io/v1/pods/{pod_id}")

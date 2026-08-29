@@ -6,11 +6,12 @@ from pathlib import Path
 
 from .config import AppConfig
 from .host import restrict_secret_file, write_text_lf
+from .jobs import PRESUMED_COMPLETE_MESSAGE
 from .log import log
 from .remote_job import render_job_script
 from .runpod import RunpodClient, RunpodError, ssh_endpoint
-from .sshutil import Ssh, SshError, ensure_ed25519, write_ssh_config
-from .storage import remote_size, verify_uploaded, write_netrc
+from .sshutil import Ssh, ensure_ed25519, ftp_check_due, write_ssh_config
+from .storage import remote_size, results_look_complete, verify_uploaded, write_netrc
 
 _TRAIN_RE = re.compile(
     r"(\d+)/(\d+)\s+\|\s+Loss:\s+([0-9.]+)\s+\|\s+Splats:\s+(\d+)"
@@ -79,19 +80,23 @@ def run_job(cfg: AppConfig, workdir: Path) -> int:
     (run_dir / "pod_id").write_text(pod_id + "\n", encoding="utf-8")
     log("pod", f"{pod_id} gpu={cfg.runpod.gpu}")
 
-    try:
-        host, port = client.wait_ssh(pod_id)
-    except RunpodError as e:
-        log("runpod", str(e))
-        return 1
+    def stop_if_ftp_done(attempt: int) -> bool:
+        if not ftp_check_due(attempt):
+            return False
+        if results_look_complete(cfg.storage, cfg.storage.result_dir):
+            log("ftp", "found REPORT.md; treating job as completed (presumably)")
+            return True
+        return False
+
+    endpoint = client.wait_ssh(pod_id, should_stop=stop_if_ftp_done)
+    if endpoint is None:
+        return _finish_from_ftp(cfg)
+    host, port = endpoint
     ssh_config = run_dir / "ssh_config"
     write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
     ssh = Ssh(ssh_config)
-    try:
-        ssh.wait_ready()
-    except SshError as e:
-        log("ssh", str(e))
-        return 1
+    if not ssh.wait_ready(should_stop=stop_if_ftp_done):
+        return _finish_from_ftp(cfg)
 
     gpu_line = ssh.check_output("nvidia-smi -L && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader")
     log("gpu", gpu_line.strip().replace("\n", " | "))
@@ -114,6 +119,17 @@ def run_job(cfg: AppConfig, workdir: Path) -> int:
         log("job", f"remote job failed rc={rc}")
         _dump_failure(ssh)
     return rc
+
+
+def _finish_from_ftp(cfg: AppConfig) -> int:
+    if results_look_complete(cfg.storage, cfg.storage.result_dir):
+        names = verify_uploaded(cfg.storage, cfg.storage.result_dir)
+        log("job", PRESUMED_COMPLETE_MESSAGE)
+        if names:
+            log("result", f"{cfg.storage.result_dir}: " + ", ".join(names))
+        return 0
+    log("job", "SSH unavailable and no REPORT.md on FTP")
+    return 1
 
 
 def inject_and_start(
@@ -149,7 +165,7 @@ def inject_and_start(
 
 
 def poll_remote_state(ssh: Ssh, timeout: int = 45) -> dict[str, str]:
-    blob = ssh.check_output(POLL_CMD, timeout=timeout)
+    blob = ssh.check_output(POLL_CMD, timeout=timeout, attempts=1)
     fields: dict[str, str] = {}
     for line in blob.splitlines():
         if line.startswith("TRAIN:"):
@@ -162,7 +178,7 @@ def poll_remote_state(ssh: Ssh, timeout: int = 45) -> dict[str, str]:
 
 def fetch_log_tail(ssh: Ssh, timeout: int = 30) -> str:
     try:
-        return ssh.check_output(LOG_TAIL_CMD, timeout=timeout)
+        return ssh.check_output(LOG_TAIL_CMD, timeout=timeout, attempts=1)
     except Exception as e:
         return f"(could not fetch logs: {e})"
 
@@ -188,6 +204,9 @@ def _watch_progress(
             ssh_fails += 1
             if last_stage in {"done", "upload"} and ssh_fails >= 2:
                 log("job", "lost SSH after upload; assuming pod self-terminated")
+                return 0
+            if ssh_fails >= 5 and results_look_complete(cfg.storage, cfg.storage.result_dir):
+                log("job", PRESUMED_COMPLETE_MESSAGE)
                 return 0
             if cfg.terminate_when_done and client and pod_id and ssh_fails >= 4:
                 if not _pod_still_running(client, pod_id) and last_stage in {"done", "upload", "report", "train"}:
@@ -224,6 +243,7 @@ def _watch_progress(
                 tail = ssh.check_output(
                     "tail -20 /workspace/logs/pipeline.log /workspace/logs/nohup.out 2>/dev/null",
                     timeout=20,
+                    attempts=1,
                 )
                 log("job", "remote process exited\n" + tail)
             except Exception:

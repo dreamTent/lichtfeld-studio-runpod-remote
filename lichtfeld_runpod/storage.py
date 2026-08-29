@@ -70,6 +70,18 @@ def write_netrc(path: Path, cfg: StorageConfig) -> None:
     restrict_secret_file(path)
 
 
+def result_names_look_complete(names: list[str]) -> bool:
+    """True if an FTP listing looks like a finished job (REPORT.md is the marker)."""
+    bases = {n.rstrip("/").rsplit("/", 1)[-1].lower() for n in names if n and n not in (".", "..")}
+    return "report.md" in bases
+
+
+def results_look_complete(cfg: StorageConfig, remote_dir: str) -> bool:
+    if not remote_dir:
+        return False
+    return result_names_look_complete(verify_uploaded(cfg, remote_dir))
+
+
 def verify_uploaded(cfg: StorageConfig, remote_dir: str) -> list[str]:
     names: list[str] = []
     if cfg.protocol != "ftp":

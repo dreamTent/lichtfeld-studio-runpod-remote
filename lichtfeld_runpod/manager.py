@@ -6,17 +6,18 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig, ConfigError, config_for_job, load_app_config
-from .jobs import Job, JobStore, default_job_name, new_id
+from .jobs import PRESUMED_COMPLETE_MESSAGE, Job, JobStore, default_job_name, new_id
 from .log import log
 from .orchestrate import fetch_log_tail, format_progress, inject_and_start, poll_remote_state
 from .runpod import RunpodClient, RunpodError, pod_is_running, ssh_endpoint
-from .sshutil import Ssh, ensure_ed25519, write_ssh_config
+from .sshutil import Ssh, ensure_ed25519, ftp_check_due, write_ssh_config
 from .status import HEARTBEAT_STALE_SECONDS, heartbeat_ok, job_indicator, pod_indicator
 from .storage import (
     curl_put,
     download_result_dir,
     list_remote_files,
     remote_size,
+    results_look_complete,
     tar_directory,
     write_netrc,
 )
@@ -39,6 +40,7 @@ class JobManager:
         self._loop_thread: threading.Thread | None = None
 
     def start(self) -> None:
+        self._reconcile_from_ftp()
         for job in self.store.all():
             if job.phase in ACTIVE_PHASES:
                 self._spawn(job.id)
@@ -163,6 +165,10 @@ class JobManager:
                 self._refresh_pods()
             except Exception as e:
                 log("manager", f"list pods: {e}")
+            try:
+                self._reconcile_from_ftp()
+            except Exception as e:
+                log("manager", f"ftp reconcile: {e}")
             self._stop.wait(POLL_SECONDS)
 
     def _refresh_pods(self) -> None:
@@ -180,6 +186,38 @@ class JobManager:
         with self._lock:
             self._api_pods = pods
             self._api_pods_at = time.time()
+
+    def _ftp_stop(self, cfg: AppConfig, job: Job, attempt: int) -> bool:
+        if not ftp_check_due(attempt):
+            return False
+        return results_look_complete(cfg.storage, job.result_dir)
+
+    def _maybe_presumed_complete(self, job: Job, cfg: AppConfig) -> bool:
+        if job.phase == "complete":
+            return True
+        if not results_look_complete(cfg.storage, job.result_dir):
+            return False
+        log("job", f"{job.id} {PRESUMED_COMPLETE_MESSAGE}")
+        self._finish_ok(job, cfg, presumed=True)
+        return True
+
+    def _reconcile_from_ftp(self) -> None:
+        try:
+            load_app_config(self.workdir)
+        except (ConfigError, Exception):
+            return
+        for job in self.store.all():
+            if job.phase == "complete":
+                continue
+            if not job.result_dir:
+                continue
+            if not (job.injected or job.pod_id or job.phase == "error"):
+                continue
+            try:
+                cfg = self._cfg_for(job)
+            except Exception:
+                continue
+            self._maybe_presumed_complete(job, cfg)
 
     def _spawn(self, job_id: str) -> None:
         with self._lock:
@@ -299,12 +337,24 @@ class JobManager:
             raise RuntimeError("no pod_id")
         self._update(job, phase="starting", message="waiting for SSH")
         client = RunpodClient(cfg.runpod.api_key)
-        host, port = client.wait_ssh(job.pod_id)
+
+        def stop(n: int) -> bool:
+            return self._ftp_stop(cfg, job, n)
+
+        endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
+        if endpoint is None:
+            if self._maybe_presumed_complete(job, cfg):
+                return
+            raise RuntimeError("pod SSH never appeared")
+        host, port = endpoint
         self._update(job, ssh_host=host, ssh_port=port)
         ssh_config = run_dir / "ssh_config"
         write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
         ssh = Ssh(ssh_config)
-        ssh.wait_ready()
+        if not ssh.wait_ready(should_stop=stop):
+            if self._maybe_presumed_complete(job, cfg):
+                return
+            raise RuntimeError("SSH never became ready")
         self._ssh[job.id] = ssh
 
         build_bytes = job.build_bytes or remote_size(cfg.storage, cfg.storage.build_archive)
@@ -317,21 +367,36 @@ class JobManager:
         ssh = self._ssh.get(job.id)
         if ssh is None:
             client = RunpodClient(cfg.runpod.api_key)
+
+            def stop(n: int) -> bool:
+                return self._ftp_stop(cfg, job, n)
+
             if job.ssh_host and job.ssh_port:
                 host, port = job.ssh_host, job.ssh_port
             elif job.pod_id:
-                host, port = client.wait_ssh(job.pod_id)
+                endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
+                if endpoint is None:
+                    if self._maybe_presumed_complete(job, cfg):
+                        return
+                    raise RuntimeError("pod SSH never appeared")
+                host, port = endpoint
                 self._update(job, ssh_host=host, ssh_port=port)
             else:
                 raise RuntimeError("no SSH session")
             ssh_config = self.store.workdir(job.id) / "ssh_config"
             write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
             ssh = Ssh(ssh_config)
+            if not ssh.wait_ready(should_stop=stop):
+                if self._maybe_presumed_complete(job, cfg):
+                    return
+                raise RuntimeError("SSH never became ready")
             self._ssh[job.id] = ssh
         client = RunpodClient(cfg.runpod.api_key)
         fails = 0
         while not self._stop.is_set():
             job = self.store.get(job.id) or job
+            if job.phase == "complete":
+                return
             try:
                 fields = poll_remote_state(ssh)
                 fails = 0
@@ -363,8 +428,11 @@ class JobManager:
                 fails += 1
                 job.message = f"connection lost ({e})"
                 self._save(job)
+                if ftp_check_due(fails) and self._maybe_presumed_complete(job, cfg):
+                    return
                 if job.pod_id and not client.pod_running(job.pod_id):
-                    # Pod vanished. If we already saw upload/done, treat as complete.
+                    if self._maybe_presumed_complete(job, cfg):
+                        return
                     if job.stage in {"done", "upload"}:
                         self._finish_ok(job, cfg)
                         return
@@ -375,9 +443,11 @@ class JobManager:
                     continue
             time.sleep(cfg.progress_interval_seconds)
 
-    def _finish_ok(self, job: Job, cfg: AppConfig) -> None:
+    def _finish_ok(self, job: Job, cfg: AppConfig, *, presumed: bool = False) -> None:
         job.phase = "complete"
-        job.message = "complete"
+        job.error = None
+        done = PRESUMED_COMPLETE_MESSAGE if presumed else "complete"
+        job.message = done
         if job.auto_download:
             dest = self.workdir / "results" / job.id
             netrc = self.store.workdir(job.id) / "netrc"
@@ -385,9 +455,9 @@ class JobManager:
             try:
                 download_result_dir(cfg.storage, job.result_dir, dest, netrc)
                 job.local_results = str(dest)
-                job.message = f"complete · downloaded to {dest}"
+                job.message = f"{done} · downloaded to {dest}"
             except Exception as e:
-                job.message = f"complete · download failed: {e}"
+                job.message = f"{done} · download failed: {e}"
         self._save(job)
         self._ssh.pop(job.id, None)
 

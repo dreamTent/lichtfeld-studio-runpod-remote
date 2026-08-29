@@ -18,3 +18,5 @@ todo:
         - upload scripts and start remote controling
 - for running lichtfield studio make the remote server act on its own without the clients supervision and shut itself down automatically after uploading the results to ftp, so that if the client gets disconnected the server still runs until the end.
 - implement a build pipeline (later)
+- add option to terminate pod
+- 

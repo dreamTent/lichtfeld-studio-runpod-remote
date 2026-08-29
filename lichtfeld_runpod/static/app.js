@@ -70,9 +70,7 @@ function rowSubtitle(row) {
   const job = row.job;
   const pod = row.pod;
   if (job) {
-    const bits = [job.phase];
-    if (job.message || job.stage) bits.push(job.message || job.stage);
-    else if (pod?.status) bits.push(pod.status);
+    const bits = [job.message || job.phase];
     if (job.gpu) bits.push(job.gpu);
     return bits.join(" · ");
   }
@@ -123,7 +121,7 @@ function renderDetail() {
   const title = job?.name || pod?.name || "—";
   const kv = [];
   if (job) {
-    kv.push(["Status", `${job.phase}${job.color ? ` · ${job.color}` : ""}`]);
+    kv.push(["Status", job.message || job.phase || "—"]);
     kv.push(["Stage", job.stage || "—"]);
     kv.push(["GPU", `${job.gpu || "—"} / ${job.cloud || "—"}`]);
     kv.push(["Pod", job.pod_id || pod?.id || "—"]);

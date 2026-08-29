@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+PRESUMED_COMPLETE_MESSAGE = "completed (presumably)"
+
 
 def new_id() -> str:
     return uuid.uuid4().hex[:12]

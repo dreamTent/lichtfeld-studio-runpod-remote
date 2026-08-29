@@ -3,10 +3,17 @@ from __future__ import annotations
 import shlex
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .host import IS_WINDOWS, posix_path, restrict_secret_file, which_tool, write_text_lf
 from .log import log
+
+SSH_FAILS_BEFORE_FTP = 5
+
+
+def ftp_check_due(attempt: int) -> bool:
+    return attempt >= SSH_FAILS_BEFORE_FTP and attempt % SSH_FAILS_BEFORE_FTP == 0
 
 
 class SshError(Exception):
@@ -112,12 +119,13 @@ class Ssh:
         *,
         check: bool = True,
         timeout: int | None = 120,
-        attempts: int = 5,
+        attempts: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
         last: subprocess.CompletedProcess[str] | None = None
         last_extra = ""
-        tries = attempts if check else 1
-        for i in range(tries):
+        i = 0
+        while True:
+            i += 1
             try:
                 r = subprocess.run(
                     cmd,
@@ -129,29 +137,37 @@ class Ssh:
                 )
             except subprocess.TimeoutExpired as e:
                 last_extra = str(e)
-                log("ssh", f"timeout try {i + 1}/{tries}")
-                if i + 1 < tries:
-                    time.sleep(2 * (i + 1))
+                log("ssh", f"timeout try {i}")
+                if not check or (attempts is not None and i >= attempts):
+                    break
+                time.sleep(min(2 * i, 30))
                 continue
             last = r
             if r.returncode == 0:
                 return r
             err = (r.stderr or r.stdout or f"exit {r.returncode}").strip()
-            log("ssh", f"exit {r.returncode} try {i + 1}/{tries} {err[-200:]}")
+            log("ssh", f"exit {r.returncode} try {i} {err[-200:]}")
             if not check:
                 return r
-            if i + 1 < tries:
-                time.sleep(2 * (i + 1))
+            if attempts is not None and i >= attempts:
+                break
+            time.sleep(min(2 * i, 30))
         if not check and last is not None:
             return last
         raise SshError(_cmd_error(cmd, last, last_extra))
 
-    def run(self, remote: str, check: bool = True, timeout: int | None = 120) -> subprocess.CompletedProcess[str]:
+    def run(
+        self,
+        remote: str,
+        check: bool = True,
+        timeout: int | None = 120,
+        attempts: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         cmd = [self._ssh, "-F", str(self.config_file), "runpod", remote]
-        return self._exec(cmd, check=check, timeout=timeout)
+        return self._exec(cmd, check=check, timeout=timeout, attempts=attempts)
 
-    def check_output(self, remote: str, timeout: int | None = 120) -> str:
-        r = self.run(remote, check=True, timeout=timeout)
+    def check_output(self, remote: str, timeout: int | None = 120, attempts: int | None = None) -> str:
+        r = self.run(remote, check=True, timeout=timeout, attempts=attempts)
         return r.stdout
 
     def put(self, local: Path, remote: str) -> None:
@@ -162,20 +178,23 @@ class Ssh:
         quoted = shlex.quote(text)
         self.run(f"umask 077; printf %s {quoted} > {shlex.quote(remote)}; chmod {mode} {shlex.quote(remote)}")
 
-    def wait_ready(self, tries: int = 40) -> None:
+    def wait_ready(self, *, should_stop: Callable[[int], bool] | None = None) -> bool:
         last = ""
-        for i in range(tries):
+        i = 0
+        while True:
+            i += 1
             try:
                 r = self.run("echo SSH_OK && hostname", check=False, timeout=20)
                 if r.returncode == 0 and "SSH_OK" in (r.stdout or ""):
                     host = (r.stdout or "").splitlines()[-1].strip()
                     log("ssh", f"ready ({host})")
-                    return
+                    return True
                 err = (r.stderr or r.stdout or f"exit {r.returncode}").strip()
                 last = err[-800:]
             except (subprocess.TimeoutExpired, SshError) as e:
                 last = str(e)
             tail = last.splitlines()[-1] if last else ""
-            log("ssh", f"retry {i + 1}/{tries} {tail}")
+            log("ssh", f"retry {i} {tail}")
+            if should_stop and should_stop(i):
+                return False
             time.sleep(2)
-        raise SshError(f"SSH never became ready: {last}")
