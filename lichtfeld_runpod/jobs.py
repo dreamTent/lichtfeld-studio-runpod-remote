@@ -19,10 +19,10 @@ def new_id() -> str:
 
 
 def default_job_name() -> str:
-    """Random letters plus local date+time, e.g. kqpwmz-20260829-001215."""
+    """Local date+time plus random letters, e.g. 20260829-001215-kqpwmz."""
     letters = "".join(random.choices(string.ascii_lowercase, k=6))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{letters}-{stamp}"
+    return f"{stamp}-{letters}"
 
 
 @dataclass
