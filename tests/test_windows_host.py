@@ -5,7 +5,7 @@ from pathlib import Path
 
 from lichtfeld_runpod.config import StorageConfig
 from lichtfeld_runpod.sshutil import ssh_config_text
-from lichtfeld_runpod.storage import tar_directory, write_netrc
+from lichtfeld_runpod.storage import tar_directory, uploaded_dataset_path, write_netrc
 
 
 class SshConfigTests(unittest.TestCase):
@@ -53,6 +53,29 @@ class TarDirectoryTests(unittest.TestCase):
                 names = tf.getnames()
             self.assertTrue(any(n.endswith("hello.txt") for n in names))
             self.assertTrue(any(n == "scene" or n.startswith("scene/") for n in names))
+
+
+class UploadedDatasetPathTests(unittest.TestCase):
+    def test_tar_keeps_original_name_and_appends_job_id(self) -> None:
+        src = Path(
+            r"C:\data\1c591935-873f-4ff5-b0a0-42f231665bbe prepared no down no up with points 260829_1247.tar"
+        )
+        self.assertEqual(
+            uploaded_dataset_path(src, "80c5f1f6c174"),
+            "lichtfeld-datasets/1c591935-873f-4ff5-b0a0-42f231665bbe prepared no down no up with points 260829_1247-80c5f1f6c174.tar",
+        )
+
+    def test_folder_gets_tar_suffix(self) -> None:
+        self.assertEqual(
+            uploaded_dataset_path(Path("/home/you/my-scene"), "abc123def456"),
+            "lichtfeld-datasets/my-scene-abc123def456.tar",
+        )
+
+    def test_tar_gz_keeps_compound_suffix(self) -> None:
+        self.assertEqual(
+            uploaded_dataset_path(Path("scene.tar.gz"), "id1"),
+            "lichtfeld-datasets/scene-id1.tar.gz",
+        )
 
 
 class NetrcTests(unittest.TestCase):

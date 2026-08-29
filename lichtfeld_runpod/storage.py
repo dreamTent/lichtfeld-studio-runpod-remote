@@ -14,6 +14,21 @@ from .log import log
 ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar", ".zip")
 
 
+def uploaded_dataset_path(src: Path, job_id: str) -> str:
+    """FTP path for a local upload: original name plus job id, under lichtfeld-datasets/."""
+    name = src.name.strip() or "dataset"
+    lower = name.lower()
+    suffix = ".tar"
+    stem = name
+    for ext in ARCHIVE_SUFFIXES:
+        if lower.endswith(ext):
+            stem = name[: -len(ext)]
+            suffix = name[len(name) - len(ext) :]
+            break
+    stem = stem.strip() or "dataset"
+    return f"lichtfeld-datasets/{stem}-{job_id}{suffix}"
+
+
 def ftp_connect(cfg: StorageConfig) -> FTP:
     ftp = FTP()
     ftp.connect(cfg.host, cfg.ftp_port, timeout=30)

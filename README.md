@@ -84,7 +84,7 @@ tar -czf lichtfeld-0.5.3-l40s-sm89.tar.gz LichtFeld-Studio
 
 Each archive is one COLMAP scene (or a folder that contains one). After extract, the runner looks for a directory with `sparse/` (COLMAP `cameras.bin` or `cameras.txt`) and an image folder named `images/`, `image/`, `imgs/`, or `rgb/`. Nested layouts are fine.
 
-The dashboard lists archives under `lichtfeld-datasets/` plus any archive sitting in the FTP root. A local folder chosen in **New job** is tarred and uploaded to `lichtfeld-datasets/<job-id>.tar`.
+The dashboard lists archives under `lichtfeld-datasets/` plus any archive sitting in the FTP root. A local folder or archive chosen in **New job** is uploaded to `lichtfeld-datasets/<original-name>-<job-id>.tar` (or the original archive suffix).
 
 An optional LichtFeld JSON config lives **inside** the scene (next to `images/` and `sparse/`). The path you enter in the job form is relative to that scene root.
 

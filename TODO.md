@@ -32,7 +32,7 @@ todo:
 - [ ] ftp uploads should end with .upload and then be renamed after the upload completes
 
 - [ ] allow for a seperate config file to be uploaded
-- [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there
+- [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there (as option)
 
 - [ ] ftp upload show progress in ui
 - [ ] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets

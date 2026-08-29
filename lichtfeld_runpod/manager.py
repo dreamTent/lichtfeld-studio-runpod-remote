@@ -19,6 +19,7 @@ from .storage import (
     remote_size,
     results_look_complete,
     tar_directory,
+    uploaded_dataset_path,
     write_netrc,
 )
 
@@ -509,7 +510,7 @@ class JobManager:
         src = Path(job.dataset_local).expanduser()
         tar_path = run_dir / "dataset.tar"
         tar_directory(src, tar_path)
-        remote = job.dataset_archive or f"lichtfeld-datasets/{job.id}.tar"
+        remote = uploaded_dataset_path(src, job.id)
         self._update(
             job,
             message=f"uploading {tar_path.stat().st_size:,} bytes",
