@@ -46,7 +46,7 @@ A pod row is created from the RunPod API list. If a job still has a `pod_id` tha
 
 If `running` has no pod color yet, the job blinks blue.
 
-`completed (presumably)` is still `phase=complete` (teal ring). It means `REPORT.md` was found in the job’s FTP result folder after SSH could not connect (typical if the pod uploaded and self-terminated while this client was offline).
+`completed (presumably)` is still `phase=complete` (teal ring). It means `REPORT.md` was found in the job’s FTP result folder after SSH could not connect (typical if the pod uploaded and self-terminated while this client was offline). After a lost SSH connection the client probes FTP once; use **Reload** on the job to probe again.
 
 ## Remote pipeline stages
 
@@ -63,7 +63,7 @@ These are written to `/workspace/state/STAGE` on the pod. They are the job’s `
 | `upload` | Uploading PLYs, logs, and the report to FTP |
 | `done` | Finished on the pod (then it may self-terminate) |
 
-The dashboard subtitle shows `job.message` when set (progress text, `connection lost`, `complete`, `completed (presumably)`, …), otherwise the phase name.
+The dashboard subtitle shows `job.message` when set (progress text, `complete`, `completed (presumably)`, …), otherwise the phase name. SSH failures keep the last progress and append ` · connection error`; the raw SSH dump stays in the server log.
 
 ## Archive and delete (listing only)
 
@@ -72,6 +72,8 @@ The dashboard can **archive** or **remove** a job from the list. Neither action 
 - the FTP result folder
 - local downloads under `results/`
 - a GPU pod that is still running (use terminate when that exists)
+
+**Reload** re-lists the job’s FTP result folder (and refreshes RunPod status). Automatic FTP checks after SSH loss happen only once.
 
 **Archive** hides the job under the Archived tab; Unarchive brings it back. **Remove from list** deletes the client record (`.run/jobs/<id>.json` and that job’s SSH workdir). A running watch thread is stopped so it cannot recreate the listing.
 

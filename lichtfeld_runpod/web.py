@@ -179,6 +179,15 @@ def create_app(workdir: Path | None = None) -> FastAPI:
         except KeyError as e:
             raise HTTPException(status_code=404, detail="job not found") from e
 
+    @app.post("/api/jobs/{job_id}/reload")
+    def reload_job(job_id: str) -> dict:
+        try:
+            return manager.reload_job(job_id).to_dict()
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str) -> dict:
         try:

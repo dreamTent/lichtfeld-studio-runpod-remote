@@ -166,7 +166,12 @@ function renderDetail() {
   const log = job?.log_tail || job?.message || "";
   const actions = job
     ? `<div class="detail-actions">
-        <p class="note">Archive or remove hides this listing only. FTP results and local downloads stay.</p>
+        <p class="note">Reload checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay.</p>
+        ${
+          job.phase !== "complete"
+            ? `<button type="button" data-act="reload">Reload</button>`
+            : ""
+        }
         ${
           job.archived
             ? `<button type="button" data-act="unarchive">Unarchive</button>`
@@ -183,7 +188,20 @@ function renderDetail() {
   `;
   box.querySelector("[data-act=archive]")?.addEventListener("click", () => archiveJob(job.id, true));
   box.querySelector("[data-act=unarchive]")?.addEventListener("click", () => archiveJob(job.id, false));
+  box.querySelector("[data-act=reload]")?.addEventListener("click", () => reloadJob(job.id));
   box.querySelector("[data-act=delete]")?.addEventListener("click", () => deleteJobListing(job.id));
+}
+
+async function reloadJob(jobId) {
+  const btn = document.querySelector("[data-act=reload]");
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/jobs/${jobId}/reload`, { method: "POST" });
+    applySnapshot(await api("/api/state"));
+  } catch (err) {
+    alert(err.message);
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function archiveJob(jobId, archived) {

@@ -13,12 +13,12 @@ class ResultCompleteTests(unittest.TestCase):
         self.assertFalse(result_names_look_complete(["train.log", "scene.ply"]))
         self.assertFalse(result_names_look_complete([]))
 
-    def test_ftp_check_every_five_ssh_fails(self) -> None:
+    def test_ftp_check_once_after_five_ssh_fails(self) -> None:
         self.assertFalse(ftp_check_due(1))
         self.assertFalse(ftp_check_due(4))
         self.assertTrue(ftp_check_due(5))
         self.assertFalse(ftp_check_due(6))
-        self.assertTrue(ftp_check_due(10))
+        self.assertFalse(ftp_check_due(10))
 
     def test_presumed_complete_is_teal(self) -> None:
         self.assertEqual(job_indicator("complete"), TEAL)

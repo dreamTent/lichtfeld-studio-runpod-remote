@@ -10,7 +10,7 @@ from .jobs import PRESUMED_COMPLETE_MESSAGE, Job, JobStore, default_job_name, ne
 from .log import log
 from .orchestrate import fetch_log_tail, format_progress, inject_and_start, poll_remote_state
 from .runpod import RunpodClient, RunpodError, pod_is_running, ssh_endpoint
-from .sshutil import Ssh, ensure_ed25519, ftp_check_due, write_ssh_config
+from .sshutil import Ssh, SshError, ensure_ed25519, ftp_check_due, write_ssh_config
 from .status import HEARTBEAT_STALE_SECONDS, heartbeat_ok, job_indicator, pod_indicator
 from .storage import (
     curl_put,
@@ -182,10 +182,6 @@ class JobManager:
                 self._refresh_pods()
             except Exception as e:
                 log("manager", f"list pods: {e}")
-            try:
-                self._reconcile_from_ftp()
-            except Exception as e:
-                log("manager", f"ftp reconcile: {e}")
             self._stop.wait(POLL_SECONDS)
 
     def _refresh_pods(self) -> None:
@@ -205,9 +201,24 @@ class JobManager:
             self._api_pods_at = time.time()
 
     def _ftp_stop(self, cfg: AppConfig, job: Job, attempt: int) -> bool:
+        if job.id in self._dropped:
+            return True
+        stored = self.store.get(job.id)
+        if stored is None or stored.phase == "complete":
+            return True
         if not ftp_check_due(attempt):
             return False
-        return results_look_complete(cfg.storage, job.result_dir)
+        return self._maybe_presumed_complete(stored, cfg)
+
+    def reload_job(self, job_id: str) -> Job:
+        job = self.store.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        self._refresh_pods()
+        if job.phase != "complete" and job.result_dir:
+            cfg = self._cfg_for(job)
+            self._maybe_presumed_complete(job, cfg)
+        return self.store.get(job_id) or job
 
     def _maybe_presumed_complete(self, job: Job, cfg: AppConfig) -> bool:
         if job.phase == "complete":
@@ -312,7 +323,8 @@ class JobManager:
             log("job", f"{job_id} failed: {e}")
             job = self.store.get(job_id)
             if job and job.phase not in {"complete"} and job_id not in self._dropped:
-                self._update(job, phase="error", error=str(e), message=str(e))
+                msg = _with_connection_error(job.message) if isinstance(e, SshError) else str(e)
+                self._update(job, phase="error", error=str(e), message=msg)
 
     def _upload_local_dataset(self, job: Job, cfg: AppConfig, run_dir: Path, netrc: Path) -> None:
         self._update(job, phase="uploading_dataset", message="packing dataset")
@@ -368,18 +380,30 @@ class JobManager:
 
         endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
         if endpoint is None:
-            if self._maybe_presumed_complete(job, cfg):
+            if job.id in self._dropped:
+                return
+            job = self.store.get(job.id) or job
+            if job.phase == "complete":
                 return
             raise RuntimeError("pod SSH never appeared")
         host, port = endpoint
+        job = self.store.get(job.id) or job
+        if job.phase == "complete" or job.id in self._dropped:
+            return
         self._update(job, ssh_host=host, ssh_port=port)
         ssh_config = run_dir / "ssh_config"
         write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
         ssh = Ssh(ssh_config)
         if not ssh.wait_ready(should_stop=stop):
-            if self._maybe_presumed_complete(job, cfg):
+            if job.id in self._dropped:
+                return
+            job = self.store.get(job.id) or job
+            if job.phase == "complete":
                 return
             raise RuntimeError("SSH never became ready")
+        job = self.store.get(job.id) or job
+        if job.phase == "complete" or job.id in self._dropped:
+            return
         self._ssh[job.id] = ssh
 
         build_bytes = job.build_bytes or remote_size(cfg.storage, cfg.storage.build_archive)
@@ -401,9 +425,15 @@ class JobManager:
             elif job.pod_id:
                 endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
                 if endpoint is None:
-                    if self._maybe_presumed_complete(job, cfg):
+                    if job.id in self._dropped:
+                        return
+                    job = self.store.get(job.id) or job
+                    if job.phase == "complete":
                         return
                     raise RuntimeError("pod SSH never appeared")
+                job = self.store.get(job.id) or job
+                if job.phase == "complete" or job.id in self._dropped:
+                    return
                 host, port = endpoint
                 self._update(job, ssh_host=host, ssh_port=port)
             else:
@@ -412,9 +442,15 @@ class JobManager:
             write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
             ssh = Ssh(ssh_config)
             if not ssh.wait_ready(should_stop=stop):
-                if self._maybe_presumed_complete(job, cfg):
+                if job.id in self._dropped:
+                    return
+                job = self.store.get(job.id) or job
+                if job.phase == "complete":
                     return
                 raise RuntimeError("SSH never became ready")
+            job = self.store.get(job.id) or job
+            if job.phase == "complete":
+                return
             self._ssh[job.id] = ssh
         client = RunpodClient(cfg.runpod.api_key)
         fails = 0
@@ -456,7 +492,8 @@ class JobManager:
                 self._save(job)
             except Exception as e:
                 fails += 1
-                job.message = f"connection lost ({e})"
+                log("ssh", f"{job.id} poll failed: {e}")
+                job.message = _with_connection_error(job.message)
                 self._save(job)
                 if ftp_check_due(fails) and self._maybe_presumed_complete(job, cfg):
                     return
@@ -490,6 +527,16 @@ class JobManager:
                 job.message = f"{done} · download failed: {e}"
         self._save(job)
         self._ssh.pop(job.id, None)
+
+
+CONNECTION_ERROR_NOTE = "connection error"
+
+
+def _with_connection_error(message: str) -> str:
+    base = (message or "").removesuffix(f" · {CONNECTION_ERROR_NOTE}").removesuffix(CONNECTION_ERROR_NOTE).rstrip(" ·")
+    if base:
+        return f"{base} · {CONNECTION_ERROR_NOTE}"
+    return CONNECTION_ERROR_NOTE
 
 
 def _pod_gpu(pod: dict[str, Any]) -> str | None:

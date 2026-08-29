@@ -13,7 +13,8 @@ SSH_FAILS_BEFORE_FTP = 5
 
 
 def ftp_check_due(attempt: int) -> bool:
-    return attempt >= SSH_FAILS_BEFORE_FTP and attempt % SSH_FAILS_BEFORE_FTP == 0
+    """True on the first attempt that is due for an FTP probe. Later retries wait for a manual reload."""
+    return attempt == SSH_FAILS_BEFORE_FTP
 
 
 class SshError(Exception):

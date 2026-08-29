@@ -205,7 +205,7 @@ def _watch_progress(
             if last_stage in {"done", "upload"} and ssh_fails >= 2:
                 log("job", "lost SSH after upload; assuming pod self-terminated")
                 return 0
-            if ssh_fails >= 5 and results_look_complete(cfg.storage, cfg.storage.result_dir):
+            if ftp_check_due(ssh_fails) and results_look_complete(cfg.storage, cfg.storage.result_dir):
                 log("job", PRESUMED_COMPLETE_MESSAGE)
                 return 0
             if cfg.terminate_when_done and client and pod_id and ssh_fails >= 4:

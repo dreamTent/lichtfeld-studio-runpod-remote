@@ -97,7 +97,7 @@ main { padding: 18px 22px 40px; }
 }
 .detail-actions button:hover { border-color: var(--muted); }
 .detail-actions button.danger { color: var(--red); border-color: #5a2430; }
-.detail-actions button.danger:hover { background: #2a1218; }
+.detail-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; color: var(--muted); }
 .kv b { color: var(--ink); font-weight: 500; }
 .log {
