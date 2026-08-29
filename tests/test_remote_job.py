@@ -66,6 +66,13 @@ class RemoteJobScriptTests(unittest.TestCase):
         text = render_job_script(_cfg(terminate=False), 1, 1, pod_id="podabc")
         self.assertIn("TERMINATE=0", text)
 
+    def test_curl_get_logs_url_and_fails_on_size_mismatch(self) -> None:
+        text = render_job_script(_cfg(), 1, 2, pod_id="podabc")
+        self.assertIn('log "GET $url -> $dest"', text)
+        self.assertIn("fail 1", text)
+        self.assertIn("ftp://example.test:21/data.tar", text)
+        self.assertNotIn("exit 1", text.split("curl_get()")[1].split("if ! done_stage")[0])
+
     def test_client_does_not_terminate_on_success(self) -> None:
         import inspect
         from lichtfeld_runpod import orchestrate

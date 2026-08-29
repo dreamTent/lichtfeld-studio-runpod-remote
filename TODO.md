@@ -25,7 +25,11 @@ todo:
 - [ ] check app compatible with windows and linux (debian/ubuntu)
 
 
+
+- make pod list refresh do every 30 seconds
 - make enter not create job
+- add field for entering runpod image template name (or modifying it from default)
+- [ ] ftp uploads should end with .upload and then be renamed after the upload completes
 
 - [ ] allow for a seperate config file to be uploaded
 - [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there

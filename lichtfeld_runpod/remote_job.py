@@ -99,6 +99,7 @@ fi
 curl_get() {{
   local url="$1" dest="$2" expect="$3"
   mkdir -p "$(dirname "$dest")"
+  log "GET $url -> $dest"
   # shellcheck disable=SC2086
   curl -C - --netrc --connect-timeout 30 --retry 30 --retry-delay 5 \\
     $CURL_EXTRA --url "$url" -o "$dest"
@@ -107,7 +108,7 @@ curl_get() {{
     got=$(stat -c%s "$dest")
     if [[ "$got" -ne "$expect" ]]; then
       echo "size mismatch $dest got=$got expected=$expect" >&2
-      exit 1
+      fail 1
     fi
   fi
 }}

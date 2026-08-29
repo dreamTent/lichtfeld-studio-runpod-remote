@@ -5,6 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from lichtfeld_runpod.config import (
+    AppConfig,
+    LichtfeldConfig,
+    RunpodConfig,
+    SshConfig,
+    StorageConfig,
+)
 from lichtfeld_runpod.jobs import Job, JobStore
 from lichtfeld_runpod.manager import JobManager
 from lichtfeld_runpod.runpod import RunpodClient, RunpodError
@@ -179,6 +186,107 @@ class DiscardPodTests(unittest.TestCase):
             mgr = JobManager(Path(raw))
             with self.assertRaises(ValueError):
                 mgr.discard_pod("  ")
+
+
+def _app_cfg(*, dataset_archive: str = "yaml-default.zip") -> AppConfig:
+    return AppConfig(
+        job_name="t",
+        progress_interval_seconds=15,
+        terminate_when_done=True,
+        runpod=RunpodConfig(
+            api_key="rpa_test",
+            gpu="NVIDIA L40S",
+            gpu_count=1,
+            cloud="SECURE",
+            image="x",
+            container_disk_gb=50,
+            volume_gb=150,
+            volume_mount="/workspace",
+            allowed_cuda_versions=[],
+        ),
+        ssh=SshConfig(identity_file=Path("/tmp/id"), public_key_file=Path("/tmp/id.pub")),
+        storage=StorageConfig(
+            host="example.test",
+            user="u",
+            password="secret",
+            protocol="ftp",
+            ftp_port=21,
+            sftp_port=22,
+            dataset_archive=dataset_archive,
+            build_archive="build.tar.gz",
+            result_dir="lichtfeld-results/t",
+        ),
+        lichtfeld=LichtfeldConfig(
+            config="",
+            max_cap=None,
+            enable_sparsity=True,
+            gut=True,
+            headless=True,
+            extra_args=[],
+            iterations=None,
+            strategy=None,
+        ),
+    )
+
+
+class RunJobConfigTests(unittest.TestCase):
+    def test_inject_uses_uploaded_dataset_not_yaml_default(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(
+                phase="created",
+                dataset_source="local",
+                dataset_archive="",
+                dataset_local="/tmp/scene",
+                pod_id=None,
+                injected=False,
+            )
+            mgr.store.save(job)
+            captured: dict[str, str] = {}
+
+            def upload(job, cfg, run_dir, netrc):
+                mgr._update(job, dataset_archive=f"lichtfeld-datasets/{job.id}.tar", dataset_bytes=99)
+
+            def create(job, cfg):
+                mgr._update(job, pod_id="pod1")
+
+            def inject(job, cfg, run_dir):
+                captured["dataset"] = cfg.storage.dataset_archive
+                mgr._update(job, injected=True)
+
+            with (
+                patch("lichtfeld_runpod.manager.load_app_config", return_value=_app_cfg()),
+                patch("lichtfeld_runpod.manager.write_netrc"),
+                patch.object(mgr, "_upload_local_dataset", side_effect=upload),
+                patch.object(mgr, "_create_pod", side_effect=create),
+                patch.object(mgr, "_inject", side_effect=inject),
+                patch.object(mgr, "_watch"),
+            ):
+                mgr._run_job(job.id)
+            self.assertEqual(captured["dataset"], f"lichtfeld-datasets/{job.id}.tar")
+
+    def test_dead_pid_marks_job_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running", stage="download_dataset", injected=True)
+            mgr.store.save(job)
+            stop = mgr._on_poll_ok(
+                job,
+                {
+                    "STAGE": "download_dataset",
+                    "PIDOK": "0",
+                    "ERR": "0",
+                    "DONE": "0",
+                    "EXIT": "",
+                    "DATA": "930264494",
+                },
+                _app_cfg(),
+                None,
+            )
+            self.assertTrue(stop)
+            stored = mgr.store.get(job.id)
+            self.assertEqual(stored.phase, "error")
+            self.assertIn("remote process exited", stored.error or "")
 
 
 class TerminateApiTests(unittest.TestCase):

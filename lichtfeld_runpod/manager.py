@@ -357,6 +357,20 @@ class JobManager:
             self._save(job)
             self._clear_next_check(job.id)
             return True
+        pid_ok = fields.get("PIDOK") == "1"
+        exit_code = fields.get("EXIT", "")
+        if not pid_ok and job.stage not in {"done", "upload", "report"}:
+            job.phase = "error"
+            job.error = f"remote process exited (rc={exit_code or '?'})"
+            job.message = job.error
+            if ssh is not None:
+                try:
+                    job.log_tail = fetch_log_tail(ssh)
+                except Exception:
+                    pass
+            self._save(job)
+            self._clear_next_check(job.id)
+            return True
         if job.phase != "running":
             job.phase = "running"
         self._save(job)
@@ -453,6 +467,7 @@ class JobManager:
             if job.dataset_source == "local" and job.phase in {"created", "uploading_dataset"}:
                 self._upload_local_dataset(job, cfg, run_dir, netrc)
                 job = self.store.get(job_id) or job
+                cfg = self._cfg_for(job)
             if self._job_should_stop(job_id):
                 return
 
@@ -466,6 +481,8 @@ class JobManager:
                 return
 
             if job.pod_id and not job.injected:
+                job = self.store.get(job_id) or job
+                cfg = self._cfg_for(job)
                 self._inject(job, cfg, run_dir)
                 job = self.store.get(job_id) or job
             if self._job_should_stop(job_id):
