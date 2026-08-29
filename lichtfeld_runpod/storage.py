@@ -65,8 +65,16 @@ def curl_url(cfg: StorageConfig, remote_path: str) -> str:
     return f"{cfg.curl_scheme}://{cfg.host}:{cfg.transfer_port}/{encoded}"
 
 
+def _netrc_quote(value: str) -> str:
+    """Quote a netrc token. Unquoted, curl splits on whitespace and stops at non-ASCII."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def write_netrc(path: Path, cfg: StorageConfig) -> None:
-    write_text_lf(path, f"machine {cfg.host} login {cfg.user} password {cfg.password}\n")
+    user = _netrc_quote(cfg.user)
+    password = _netrc_quote(cfg.password)
+    write_text_lf(path, f"machine {cfg.host} login {user} password {password}\n")
     restrict_secret_file(path)
 
 

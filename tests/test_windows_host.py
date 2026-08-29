@@ -3,8 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from lichtfeld_runpod.config import StorageConfig
 from lichtfeld_runpod.sshutil import ssh_config_text
-from lichtfeld_runpod.storage import tar_directory
+from lichtfeld_runpod.storage import tar_directory, write_netrc
 
 
 class SshConfigTests(unittest.TestCase):
@@ -52,6 +53,45 @@ class TarDirectoryTests(unittest.TestCase):
                 names = tf.getnames()
             self.assertTrue(any(n.endswith("hello.txt") for n in names))
             self.assertTrue(any(n == "scene" or n.startswith("scene/") for n in names))
+
+
+class NetrcTests(unittest.TestCase):
+    def test_quotes_non_ascii_password(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "netrc"
+            cfg = StorageConfig(
+                host="uxxxxxx.your-storagebox.de",
+                user="uxxxxxx-sub6",
+                password="abc§ßdef",
+                protocol="ftp",
+                ftp_port=21,
+                sftp_port=22,
+                dataset_archive="d.tar",
+                build_archive="b.tar.gz",
+                result_dir="r",
+            )
+            write_netrc(path, cfg)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('login "uxxxxxx-sub6"', text)
+            self.assertIn('password "abc§ßdef"', text)
+            self.assertNotIn(" password abc", text)
+
+    def test_escapes_quotes_in_password(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "netrc"
+            cfg = StorageConfig(
+                host="example.test",
+                user="u",
+                password=r'a"b\c',
+                protocol="ftp",
+                ftp_port=21,
+                sftp_port=22,
+                dataset_archive="d.tar",
+                build_archive="b.tar.gz",
+                result_dir="r",
+            )
+            write_netrc(path, cfg)
+            self.assertIn(r'password "a\"b\\c"', path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

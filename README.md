@@ -11,6 +11,7 @@ The usual way to run this is the **local dashboard**. A one-shot CLI job from `c
 - `curl` on this machine (used for FTP/SFTP transfers)
 - A RunPod API key with full permissions
 - An FTP or SFTP server with read/write access (for example a Hetzner Storage Box)
+- Filezilla or another ftp software
 
 On **Windows**, enable **OpenSSH Client** under Settings → Apps → Optional features. Windows 10+ already includes `curl.exe`. Use PowerShell, not Git Bash, so the app finds Microsoft OpenSSH rather than MSYS `ssh`.
 

@@ -22,8 +22,21 @@ todo:
 - [x] add an option to archive or delete a job (the listing not the data)
 - [ ] create setup and start script for windows so users just have to execute a bat file
 - [ ] create a setup and start script for linux users (debian/ubuntu)
-- [ ] make app compatible with windows and linux (debian/ubuntu)
+- [ ] check app compatible with windows and linux (debian/ubuntu)
 
+
+- make enter not create job
+
+- [ ] allow for a seperate config file to be uploaded
+- [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there
+
+- [ ] ftp upload show progress in ui
+- [ ] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets
+
+- [ ] i want to be able to create multiple jobs with the same dataset with diffferent config files. this should also be compatible with uploading. give the option to select a different jobs upload as dataset, and wait for it to finish before starting
+
+- [ ] make settings override optional in ui, so that only a config file gets used
 
 bugs
-- after a job is done it switches to completed presumably
+- after a job is done it switches to "completed presumably"
+- if a dataset is already a tar no need to pack it
