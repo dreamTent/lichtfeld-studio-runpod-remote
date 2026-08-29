@@ -44,6 +44,53 @@ You can also enter the same values later in the dashboard under **Settings**.
 
 An SSH key is created at `~/.ssh/runpod_ed25519` if it is missing, and registered on the RunPod account.
 
+## FTP/SFTP layout
+
+Paths are relative to the account’s login home (the directory you land in after connecting). Spaces in names are fine. The dashboard lists archives over **FTP** (port 21); SFTP can still transfer files if you set the paths yourself in `config.yaml`.
+
+Use this top-level layout:
+
+```
+/
+├── lichtfeld-builds/          # LichtFeld Studio binaries (you upload these)
+│   └── lichtfeld-0.5.3-l40s-sm89-260828/
+│       └── lichtfeld-0.5.3-l40s-sm89.tar.gz
+├── lichtfeld-datasets/        # COLMAP scenes as archives
+│   ├── my-scene.tar
+│   └── other-scene.zip
+└── lichtfeld-results/         # Job outputs (created automatically)
+    └── job-name-abc123/
+        ├── splat_*.ply
+        ├── REPORT.md
+        └── …
+```
+
+Accepted archive suffixes: `.tar.gz`, `.tgz`, `.tar`, `.zip`.
+
+### Builds (`lichtfeld-builds/`)
+
+Put packed LichtFeld Studio trees here. Nested folders are listed (up to 4 levels). If that directory is empty, the dashboard also offers archives in the FTP root whose path contains `build`.
+
+A build archive must unpack so the binary is at `LichtFeld-Studio/build/LichtFeld-Studio` (the pod extracts into `/workspace`). Typical packing:
+
+```bash
+tar -czf lichtfeld-0.5.3-l40s-sm89.tar.gz LichtFeld-Studio
+```
+
+**Create build** in the dashboard is not implemented yet, so you upload these archives yourself.
+
+### Datasets (`lichtfeld-datasets/`)
+
+Each archive is one COLMAP scene (or a folder that contains one). After extract, the runner looks for a directory with `sparse/` (COLMAP `cameras.bin` or `cameras.txt`) and an image folder named `images/`, `image/`, `imgs/`, or `rgb/`. Nested layouts are fine.
+
+The dashboard lists archives under `lichtfeld-datasets/` plus any archive sitting in the FTP root. A local folder chosen in **New job** is tarred and uploaded to `lichtfeld-datasets/<job-id>.tar`.
+
+An optional LichtFeld JSON config lives **inside** the scene (next to `images/` and `sparse/`). The path you enter in the job form is relative to that scene root.
+
+### Results (`lichtfeld-results/`)
+
+Created on upload. The default folder is `lichtfeld-results/<job-name>-<job-id>` unless you set a different path. Contents are listed under [What gets uploaded](#what-gets-uploaded).
+
 ## Start the dashboard
 
 ```powershell
@@ -67,14 +114,12 @@ Open **Settings** and save your RunPod API key and storage login. Values are wri
 Open **New job** and choose:
 
 - GPU type and cloud (`SECURE`, `COMMUNITY`, or `AUTO`)
-- A LichtFeld **build** already on the FTP server
-- A **dataset**: an existing FTP archive, or a local folder (tarred and uploaded)
+- A LichtFeld **build** from `lichtfeld-builds/` ([layout](#ftpsftp-layout))
+- A **dataset**: an existing archive under `lichtfeld-datasets/`, or a local folder (tarred and uploaded there)
 - Optional LichtFeld config path (relative to the COLMAP scene root: the folder with `images/` and `sparse/`)
 - Result folder on FTP, max Gaussians, sparsity / GUT
 - Whether to download results to this machine when done
 - Whether the pod should terminate after the FTP upload (on by default)
-
-**Create build** in the nav is not implemented yet.
 
 ## What a job does
 

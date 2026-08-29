@@ -1,6 +1,6 @@
 
 todo:
-- add ui
+- [x] add ui basis
     - shows your current pods and jobs
         - non controled pods that this app didnt start have a white circle, controled pods are green (actively recieving status messages), pods that are controled but connection was lost should be yellow, pods that have had an error are blinking red, pods that have unexpectadly disconnected are red
         - if a job doesnt have a runpod yet because the dataset is uploading, if a job is waiting for a pod it should blink blue, it should be blue, if a pod has been created and it hasnt been puppeteered yet it should blink blue,
@@ -16,7 +16,10 @@ todo:
         - upload dataset to ftp server as tar
         - start pod (if non of that type available wait)
         - upload scripts and start remote controling
-- for running lichtfield studio make the remote server act on its own without the clients supervision and shut itself down automatically after uploading the results to ftp, so that if the client gets disconnected the server still runs until the end.
-- implement a build pipeline (later)
-- add option to terminate pod (Discard pod in the dashboard)
-- add an option to archive or delete a job (the listing not the data)
+- [x] for running lichtfield studio make the remote server act on its own without the clients supervision and shut itself down automatically after uploading the results to ftp, so that if the client gets disconnected the server still runs until the end.
+- [ ] implement a build pipeline (later)
+- [x] add option to terminate pod (Discard pod in the dashboard)
+- [x] add an option to archive or delete a job (the listing not the data)
+- [ ] create setup and start script for windows so users just have to execute a bat file
+- [ ] create a setup and start script for linux users (debian/ubuntu)
+- [ ] make app compatible with windows and linux (debian/ubuntu)
