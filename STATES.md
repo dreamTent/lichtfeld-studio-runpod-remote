@@ -71,7 +71,9 @@ The dashboard can **archive** or **remove** a job from the list. Neither action 
 
 - the FTP result folder
 - local downloads under `results/`
-- a GPU pod that is still running (use terminate when that exists)
+- a GPU pod that is still running (use **Discard pod**)
+
+**Discard pod** terminates the GPU on RunPod. The job listing stays. An unfinished job is marked as an error (`pod discarded`). A finished job is left complete. Foreign pods (white circle) can be discarded the same way.
 
 **Reload** probes SSH (so the error count / last update changes) and re-lists the job’s FTP result folder. Automatic FTP checks after SSH loss happen only once.
 

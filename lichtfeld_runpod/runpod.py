@@ -235,8 +235,10 @@ class RunpodClient:
     def terminate(self, pod_id: str) -> None:
         status, body = self.request("DELETE", f"https://rest.runpod.io/v1/pods/{pod_id}")
         log("runpod", f"terminate {pod_id} -> {status}")
-        if status not in (200, 204):
-            log("runpod", f"terminate body {str(body)[:300]}")
+        if status in (200, 204, 404):
+            return
+        log("runpod", f"terminate body {str(body)[:300]}")
+        raise RunpodError(f"terminate {pod_id} failed {status} {body}")
 
     def pod_running(self, pod_id: str) -> bool:
         try:

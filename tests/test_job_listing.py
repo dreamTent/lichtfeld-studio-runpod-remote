@@ -2,8 +2,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from lichtfeld_runpod.jobs import Job, JobStore
+from lichtfeld_runpod.manager import JobManager
+from lichtfeld_runpod.runpod import RunpodClient, RunpodError
 
 
 def _job(**kw) -> Job:
@@ -86,6 +90,108 @@ class JobListingTests(unittest.TestCase):
             self.assertFalse((root / "jobs" / job.id).exists())
             self.assertTrue((results / "REPORT.md").is_file())
             self.assertFalse(store.delete(job.id))
+
+
+class FakeSsh:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class DiscardPodTests(unittest.TestCase):
+    def _patch_runpod(self, client: MagicMock):
+        cfg = SimpleNamespace(runpod=SimpleNamespace(api_key="k"))
+        return (
+            patch("lichtfeld_runpod.manager.load_app_config", return_value=cfg),
+            patch("lichtfeld_runpod.manager.RunpodClient", return_value=client),
+        )
+
+    def test_discard_marks_running_job_error_and_closes_ssh(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running", pod_id="pod1")
+            mgr.store.save(job)
+            ssh = FakeSsh()
+            mgr._ssh[job.id] = ssh
+            mgr._set_next_check(job.id, 15, "poll")
+            client = MagicMock()
+            client.list_pods.return_value = []
+            load, rp = self._patch_runpod(client)
+            with load, rp:
+                out = mgr.discard_pod("pod1")
+            self.assertEqual(out, {"ok": True, "id": "pod1"})
+            client.terminate.assert_called_once_with("pod1")
+            stored = mgr.store.get(job.id)
+            self.assertEqual(stored.phase, "error")
+            self.assertEqual(stored.message, "pod discarded")
+            self.assertEqual(stored.error, "pod discarded")
+            self.assertTrue(ssh.closed)
+            self.assertNotIn(job.id, mgr._ssh)
+            self.assertTrue(mgr._job_should_stop(job.id))
+
+    def test_discard_leaves_complete_job_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="complete", pod_id="pod1")
+            mgr.store.save(job)
+            client = MagicMock()
+            client.list_pods.return_value = []
+            load, rp = self._patch_runpod(client)
+            with load, rp:
+                mgr.discard_pod("pod1")
+            stored = mgr.store.get(job.id)
+            self.assertEqual(stored.phase, "complete")
+            client.terminate.assert_called_once_with("pod1")
+
+    def test_discard_foreign_pod(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            mgr._api_pods = [{"id": "foreign", "status": "RUNNING"}]
+            client = MagicMock()
+            client.list_pods.return_value = []
+            load, rp = self._patch_runpod(client)
+            with load, rp:
+                mgr.discard_pod("foreign")
+            client.terminate.assert_called_once_with("foreign")
+            self.assertEqual(mgr._api_pods, [])
+            self.assertEqual(mgr.jobs(), [])
+
+    def test_discard_failure_unhalts_running_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running", pod_id="pod1")
+            mgr.store.save(job)
+            client = MagicMock()
+            client.terminate.side_effect = RunpodError("nope")
+            load, rp = self._patch_runpod(client)
+            with load, rp, patch.object(mgr, "_spawn") as spawn:
+                with self.assertRaises(RunpodError):
+                    mgr.discard_pod("pod1")
+                spawn.assert_called_once_with(job.id)
+            stored = mgr.store.get(job.id)
+            self.assertEqual(stored.phase, "running")
+            self.assertNotIn(job.id, mgr._halted)
+
+    def test_empty_pod_id_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            with self.assertRaises(ValueError):
+                mgr.discard_pod("  ")
+
+
+class TerminateApiTests(unittest.TestCase):
+    def test_404_is_success(self) -> None:
+        client = RunpodClient("k")
+        with patch.object(client, "request", return_value=(404, {"error": "gone"})):
+            client.terminate("x")
+
+    def test_500_raises(self) -> None:
+        client = RunpodClient("k")
+        with patch.object(client, "request", return_value=(500, "fail")):
+            with self.assertRaises(RunpodError):
+                client.terminate("x")
 
 
 if __name__ == "__main__":

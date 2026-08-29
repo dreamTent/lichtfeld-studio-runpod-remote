@@ -196,6 +196,17 @@ def create_app(workdir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found") from e
         return {"ok": True, "id": job_id}
 
+    @app.post("/api/pods/{pod_id}/discard")
+    def discard_pod(pod_id: str) -> dict:
+        try:
+            return manager.discard_pod(pod_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except RunpodError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
     @app.get("/api/pods")
     def list_pods() -> dict:
         return {"pods": manager.snapshot()["pods"]}

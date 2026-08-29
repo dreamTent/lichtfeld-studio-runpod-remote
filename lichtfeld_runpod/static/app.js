@@ -8,6 +8,7 @@ const state = {
   listFilter: "current",
   reloading: null,
   reloadFlash: null,
+  discarding: null,
 };
 
 function showView(name) {
@@ -203,6 +204,12 @@ function select(sel) {
   renderDetail();
 }
 
+function livePodId(pod) {
+  if (!pod?.id) return null;
+  if (String(pod.status || "").toUpperCase() === "GONE") return null;
+  return pod.id;
+}
+
 function renderDetail() {
   const box = $("#detail");
   if (!state.selected) {
@@ -239,24 +246,40 @@ function renderDetail() {
     kv.push(["Control", "foreign (not started by this app)"]);
   }
   const log = job?.log_tail || job?.message || "";
-  const actions = job
-    ? `<div class="detail-actions">
-        <p class="note">Reload probes SSH and checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay.</p>
-        ${
-          job.phase !== "complete"
-            ? `<button type="button" data-act="reload"${state.reloading === job.id ? " disabled" : ""}>${
-                state.reloading === job.id ? "Reloading…" : "Reload"
-              }</button>`
-            : ""
-        }
-        ${
-          job.archived
-            ? `<button type="button" data-act="unarchive">Unarchive</button>`
-            : `<button type="button" data-act="archive">Archive</button>`
-        }
-        <button type="button" data-act="delete" class="danger">Remove from list</button>
-      </div>`
+  const podId = livePodId(pod);
+  const discarding = podId && state.discarding === podId;
+  const reloadBtn =
+    job && job.phase !== "complete"
+      ? `<button type="button" data-act="reload"${state.reloading === job.id ? " disabled" : ""}>${
+          state.reloading === job.id ? "Reloading…" : "Reload"
+        }</button>`
+      : "";
+  const discardBtn = podId
+    ? `<button type="button" data-act="discard" class="danger"${discarding ? " disabled" : ""}>${
+        discarding ? "Discarding…" : "Discard pod"
+      }</button>`
     : "";
+  const archiveBtn = job
+    ? job.archived
+      ? `<button type="button" data-act="unarchive">Unarchive</button>`
+      : `<button type="button" data-act="archive">Archive</button>`
+    : "";
+  const deleteBtn = job ? `<button type="button" data-act="delete" class="danger">Remove from list</button>` : "";
+  const note = job
+    ? podId
+      ? "Reload probes SSH and checks FTP for finished results. Discard pod terminates the GPU on RunPod. Archive or remove hides this listing only. FTP results and local downloads stay."
+      : "Reload probes SSH and checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay."
+    : "This pod was not started by this app. Discard pod terminates it on RunPod.";
+  const actions =
+    job || podId
+      ? `<div class="detail-actions">
+        <p class="note">${note}</p>
+        ${reloadBtn}
+        ${discardBtn}
+        ${archiveBtn}
+        ${deleteBtn}
+      </div>`
+      : "";
   box.innerHTML = `
     <h3>${esc(title)}</h3>
     <div class="kv">${kv
@@ -269,6 +292,7 @@ function renderDetail() {
   box.querySelector("[data-act=unarchive]")?.addEventListener("click", () => archiveJob(job.id, false));
   box.querySelector("[data-act=reload]")?.addEventListener("click", () => reloadJob(job.id));
   box.querySelector("[data-act=delete]")?.addEventListener("click", () => deleteJobListing(job.id));
+  box.querySelector("[data-act=discard]")?.addEventListener("click", () => discardPod(podId, Boolean(job)));
 }
 
 async function reloadJob(jobId) {
@@ -313,6 +337,26 @@ async function deleteJobListing(jobId) {
     applySnapshot(await api("/api/state"));
   } catch (err) {
     alert(err.message);
+  }
+}
+
+async function discardPod(podId, attachedToJob) {
+  const ok = window.confirm(
+    attachedToJob
+      ? "Terminate this GPU pod on RunPod? The job will stop. FTP results and the job listing stay."
+      : "Terminate this GPU pod on RunPod? This app did not start it."
+  );
+  if (!ok) return;
+  state.discarding = podId;
+  renderLists();
+  try {
+    await api(`/api/pods/${encodeURIComponent(podId)}/discard`, { method: "POST" });
+    applySnapshot(await api("/api/state"));
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    state.discarding = null;
+    renderLists();
   }
 }
 

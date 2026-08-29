@@ -54,7 +54,7 @@ Linux / macOS: `python3 -m lichtfeld_runpod --ui`.
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Optional: `--host` and `--port` (defaults `127.0.0.1` and `8765`).
 
-Circle colors and job/pod phases are listed in [STATES.md](STATES.md).
+Circle colors and job/pod phases are listed in [STATES.md](STATES.md). **Discard pod** on a job or a foreign pod terminates that GPU on RunPod.
 
 `--ui` only starts the local app. It does not create a GPU pod until you submit a job.
 

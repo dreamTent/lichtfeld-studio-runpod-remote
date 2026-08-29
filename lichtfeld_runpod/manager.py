@@ -39,6 +39,7 @@ class JobManager:
         self._api_pods_at = 0.0
         self._loop_thread: threading.Thread | None = None
         self._dropped: set[str] = set()
+        self._halted: set[str] = set()
         self._next_check: dict[str, tuple[float, str]] = {}
         self._next_pod_list_at: float | None = None
 
@@ -118,6 +119,57 @@ class JobManager:
         self._clear_next_check(job_id)
         self.store.delete(job_id)
         log("job", f"{job_id} removed from listing (FTP/local results kept)")
+
+    def discard_pod(self, pod_id: str) -> dict[str, Any]:
+        pod_id = str(pod_id or "").strip()
+        if not pod_id:
+            raise ValueError("no pod id")
+        jobs = [j for j in self.store.all() if j.pod_id == pod_id]
+        for job in jobs:
+            self._halt_job(job.id)
+        try:
+            cfg = load_app_config(self.workdir)
+            RunpodClient(cfg.runpod.api_key).terminate(pod_id)
+        except Exception:
+            for job in jobs:
+                if job.id in self._dropped:
+                    continue
+                self._unhalt_job(job.id)
+                stored = self.store.get(job.id)
+                if stored and stored.phase in ACTIVE_PHASES:
+                    self._spawn(stored.id)
+            raise
+        log("pod", f"{pod_id} discarded")
+        for job in jobs:
+            stored = self.store.get(job.id)
+            if stored is None:
+                continue
+            if stored.phase != "complete":
+                self._update(stored, phase="error", error="pod discarded", message="pod discarded")
+            else:
+                self._clear_next_check(stored.id)
+        with self._lock:
+            self._api_pods = [p for p in self._api_pods if str(p.get("id") or "") != pod_id]
+        self._refresh_pods()
+        return {"ok": True, "id": pod_id}
+
+    def _halt_job(self, job_id: str) -> None:
+        with self._lock:
+            self._halted.add(job_id)
+            ssh = self._ssh.pop(job_id, None)
+        if ssh is not None:
+            ssh.close()
+        self._clear_next_check(job_id)
+
+    def _unhalt_job(self, job_id: str) -> None:
+        with self._lock:
+            self._halted.discard(job_id)
+
+    def _job_should_stop(self, job_id: str) -> bool:
+        if job_id in self._dropped or job_id in self._halted:
+            return True
+        stored = self.store.get(job_id)
+        return stored is None or stored.phase in {"complete", "error"}
 
     def snapshot(self) -> dict[str, Any]:
         jobs = self.store.all()
@@ -221,10 +273,10 @@ class JobManager:
             self._api_pods_at = time.time()
 
     def _ftp_stop(self, cfg: AppConfig, job: Job, attempt: int) -> bool:
-        if job.id in self._dropped:
+        if self._job_should_stop(job.id):
             return True
         stored = self.store.get(job.id)
-        if stored is None or stored.phase == "complete":
+        if stored is None:
             return True
         if not ftp_check_due(attempt):
             return False
@@ -388,7 +440,7 @@ class JobManager:
 
     def _run_job(self, job_id: str) -> None:
         job = self.store.get(job_id)
-        if job is None or job_id in self._dropped:
+        if job is None or self._job_should_stop(job_id):
             return
         try:
             if job.phase in {"complete", "error"}:
@@ -401,7 +453,7 @@ class JobManager:
             if job.dataset_source == "local" and job.phase in {"created", "uploading_dataset"}:
                 self._upload_local_dataset(job, cfg, run_dir, netrc)
                 job = self.store.get(job_id) or job
-            if job_id in self._dropped or self.store.get(job_id) is None:
+            if self._job_should_stop(job_id):
                 return
 
             if job.phase in {"created", "uploading_dataset"}:
@@ -410,21 +462,23 @@ class JobManager:
             if not job.pod_id:
                 self._create_pod(job, cfg)
                 job = self.store.get(job_id) or job
-            if job_id in self._dropped or self.store.get(job_id) is None:
+            if self._job_should_stop(job_id):
                 return
 
             if job.pod_id and not job.injected:
                 self._inject(job, cfg, run_dir)
                 job = self.store.get(job_id) or job
-            if job_id in self._dropped or self.store.get(job_id) is None:
+            if self._job_should_stop(job_id):
                 return
 
             if job.injected and job.phase not in {"complete", "error"}:
                 self._watch(job, cfg)
         except Exception as e:
             log("job", f"{job_id} failed: {e}")
+            if job_id in self._dropped or job_id in self._halted:
+                return
             job = self.store.get(job_id)
-            if job and job.phase not in {"complete"} and job_id not in self._dropped:
+            if job and job.phase not in {"complete"}:
                 msg = _with_connection_error(job.message) if isinstance(e, SshError) else str(e)
                 extra: dict[str, Any] = {}
                 if isinstance(e, SshError):
@@ -460,7 +514,7 @@ class JobManager:
                 self._update(current, message=msg)
 
         pod = client.create_pod_retry(
-            should_stop=lambda: self._stop.is_set() or job.id in self._dropped,
+            should_stop=lambda: self._stop.is_set() or self._job_should_stop(job.id),
             on_attempt=on_attempt,
             on_wait=lambda delay: self._set_next_check(job.id, delay, "retry"),
             name=job.name,
@@ -491,29 +545,23 @@ class JobManager:
 
         endpoint = client.wait_ssh(job.pod_id, should_stop=stop, on_wait=on_wait)
         if endpoint is None:
-            if job.id in self._dropped:
-                return
-            job = self.store.get(job.id) or job
-            if job.phase == "complete":
+            if self._job_should_stop(job.id):
                 return
             raise RuntimeError("pod SSH never appeared")
         host, port = endpoint
         job = self.store.get(job.id) or job
-        if job.phase == "complete" or job.id in self._dropped:
+        if self._job_should_stop(job.id):
             return
         self._update(job, ssh_host=host, ssh_port=port)
         ssh_config = run_dir / "ssh_config"
         write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
         ssh = Ssh(ssh_config)
         if not ssh.wait_ready(should_stop=stop, on_wait=on_wait):
-            if job.id in self._dropped:
-                return
-            job = self.store.get(job.id) or job
-            if job.phase == "complete":
+            if self._job_should_stop(job.id):
                 return
             raise RuntimeError("SSH never became ready")
         job = self.store.get(job.id) or job
-        if job.phase == "complete" or job.id in self._dropped:
+        if self._job_should_stop(job.id):
             return
         self._ssh[job.id] = ssh
         self._clear_next_check(job.id)
@@ -540,14 +588,11 @@ class JobManager:
             elif job.pod_id:
                 endpoint = client.wait_ssh(job.pod_id, should_stop=stop, on_wait=on_wait)
                 if endpoint is None:
-                    if job.id in self._dropped:
-                        return
-                    job = self.store.get(job.id) or job
-                    if job.phase == "complete":
+                    if self._job_should_stop(job.id):
                         return
                     raise RuntimeError("pod SSH never appeared")
                 job = self.store.get(job.id) or job
-                if job.phase == "complete" or job.id in self._dropped:
+                if self._job_should_stop(job.id):
                     return
                 host, port = endpoint
                 self._update(job, ssh_host=host, ssh_port=port)
@@ -557,19 +602,16 @@ class JobManager:
             write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
             ssh = Ssh(ssh_config)
             if not ssh.wait_ready(should_stop=stop, on_wait=on_wait):
-                if job.id in self._dropped:
-                    return
-                job = self.store.get(job.id) or job
-                if job.phase == "complete":
+                if self._job_should_stop(job.id):
                     return
                 raise RuntimeError("SSH never became ready")
             job = self.store.get(job.id) or job
-            if job.phase == "complete":
+            if self._job_should_stop(job.id):
                 return
             self._ssh[job.id] = ssh
         client = RunpodClient(cfg.runpod.api_key)
         while not self._stop.is_set():
-            if job.id in self._dropped:
+            if self._job_should_stop(job.id):
                 return
             stored = self.store.get(job.id)
             if stored is None:
@@ -580,9 +622,13 @@ class JobManager:
             kind = "poll"
             try:
                 fields = poll_remote_state(ssh)
+                if self._job_should_stop(job.id):
+                    return
                 if self._on_poll_ok(job, fields, cfg, ssh):
                     return
             except Exception as e:
+                if self._job_should_stop(job.id):
+                    return
                 kind = "retry"
                 log("ssh", f"{job.id} poll failed: {e}")
                 job = self._note_connection_error(job)
