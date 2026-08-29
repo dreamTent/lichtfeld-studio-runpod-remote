@@ -23,3 +23,7 @@ todo:
 - [ ] create setup and start script for windows so users just have to execute a bat file
 - [ ] create a setup and start script for linux users (debian/ubuntu)
 - [ ] make app compatible with windows and linux (debian/ubuntu)
+
+
+bugs
+- after a job is done it switches to completed presumably
