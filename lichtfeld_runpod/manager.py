@@ -39,6 +39,7 @@ class JobManager:
         self._api_pods_at = 0.0
         self._loop_thread: threading.Thread | None = None
         self._dropped: set[str] = set()
+        self._next_check: dict[str, tuple[float, str]] = {}
 
     def start(self) -> None:
         self._reconcile_from_ftp()
@@ -113,6 +114,7 @@ class JobManager:
             ssh = self._ssh.pop(job_id, None)
         if ssh is not None:
             ssh.close()
+        self._clear_next_check(job_id)
         self.store.delete(job_id)
         log("job", f"{job_id} removed from listing (FTP/local results kept)")
 
@@ -174,11 +176,16 @@ class JobManager:
                 )
         job_rows = []
         pod_color_by_job = {p["job_id"]: p["color"] for p in pod_rows if p.get("job_id")}
+        with self._lock:
+            pending = dict(self._next_check)
         for job in jobs:
+            next_at, kind = pending.get(job.id, (None, None))
             job_rows.append(
                 {
                     **job.to_dict(),
                     "color": job_indicator(job.phase, pod_color_by_job.get(job.id) if job.pod_id else None),
+                    "next_check_at": next_at,
+                    "next_check_kind": kind,
                 }
             )
         return {"jobs": job_rows, "pods": pod_rows}
@@ -290,6 +297,7 @@ class JobManager:
                 except Exception:
                     pass
             self._save(job)
+            self._clear_next_check(job.id)
             return True
         if job.phase != "running":
             job.phase = "running"
@@ -331,6 +339,18 @@ class JobManager:
             thread = threading.Thread(target=self._run_job, args=(job_id,), name=f"job-{job_id}", daemon=True)
             self._threads[job_id] = thread
             thread.start()
+
+    def _set_next_check(self, job_id: str, seconds: float, kind: str) -> None:
+        with self._lock:
+            self._next_check[job_id] = (time.time() + float(seconds), kind)
+
+    def _clear_next_check(self, job_id: str) -> None:
+        with self._lock:
+            self._next_check.pop(job_id, None)
+
+    def _wait_next(self, job_id: str, seconds: float, kind: str) -> None:
+        self._set_next_check(job_id, seconds, kind)
+        self._stop.wait(seconds)
 
     def _save(self, job: Job) -> None:
         if job.id in self._dropped:
@@ -404,6 +424,8 @@ class JobManager:
                 if isinstance(e, SshError):
                     extra["connection_errors"] = int(job.connection_errors or 0) + 1
                 self._update(job, phase="error", error=str(e), message=msg, **extra)
+        finally:
+            self._clear_next_check(job_id)
 
     def _upload_local_dataset(self, job: Job, cfg: AppConfig, run_dir: Path, netrc: Path) -> None:
         self._update(job, phase="uploading_dataset", message="packing dataset")
@@ -434,6 +456,7 @@ class JobManager:
         pod = client.create_pod_retry(
             should_stop=lambda: self._stop.is_set() or job.id in self._dropped,
             on_attempt=on_attempt,
+            on_wait=lambda delay: self._set_next_check(job.id, delay, "retry"),
             name=job.name,
             image=cfg.runpod.image,
             gpu=job.gpu,
@@ -457,7 +480,10 @@ class JobManager:
         def stop(n: int) -> bool:
             return self._ftp_stop(cfg, job, n)
 
-        endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
+        def on_wait(delay: float) -> None:
+            self._set_next_check(job.id, delay, "retry")
+
+        endpoint = client.wait_ssh(job.pod_id, should_stop=stop, on_wait=on_wait)
         if endpoint is None:
             if job.id in self._dropped:
                 return
@@ -473,7 +499,7 @@ class JobManager:
         ssh_config = run_dir / "ssh_config"
         write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
         ssh = Ssh(ssh_config)
-        if not ssh.wait_ready(should_stop=stop):
+        if not ssh.wait_ready(should_stop=stop, on_wait=on_wait):
             if job.id in self._dropped:
                 return
             job = self.store.get(job.id) or job
@@ -484,6 +510,7 @@ class JobManager:
         if job.phase == "complete" or job.id in self._dropped:
             return
         self._ssh[job.id] = ssh
+        self._clear_next_check(job.id)
 
         build_bytes = job.build_bytes or remote_size(cfg.storage, cfg.storage.build_archive)
         dataset_bytes = job.dataset_bytes or remote_size(cfg.storage, cfg.storage.dataset_archive)
@@ -499,10 +526,13 @@ class JobManager:
             def stop(n: int) -> bool:
                 return self._ftp_stop(cfg, job, n)
 
+            def on_wait(delay: float) -> None:
+                self._set_next_check(job.id, delay, "retry")
+
             if job.ssh_host and job.ssh_port:
                 host, port = job.ssh_host, job.ssh_port
             elif job.pod_id:
-                endpoint = client.wait_ssh(job.pod_id, should_stop=stop)
+                endpoint = client.wait_ssh(job.pod_id, should_stop=stop, on_wait=on_wait)
                 if endpoint is None:
                     if job.id in self._dropped:
                         return
@@ -520,7 +550,7 @@ class JobManager:
             ssh_config = self.store.workdir(job.id) / "ssh_config"
             write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
             ssh = Ssh(ssh_config)
-            if not ssh.wait_ready(should_stop=stop):
+            if not ssh.wait_ready(should_stop=stop, on_wait=on_wait):
                 if job.id in self._dropped:
                     return
                 job = self.store.get(job.id) or job
@@ -532,7 +562,6 @@ class JobManager:
                 return
             self._ssh[job.id] = ssh
         client = RunpodClient(cfg.runpod.api_key)
-        fails = 0
         while not self._stop.is_set():
             if job.id in self._dropped:
                 return
@@ -542,13 +571,13 @@ class JobManager:
             job = stored
             if job.phase == "complete":
                 return
+            kind = "poll"
             try:
                 fields = poll_remote_state(ssh)
-                fails = 0
                 if self._on_poll_ok(job, fields, cfg, ssh):
                     return
             except Exception as e:
-                fails += 1
+                kind = "retry"
                 log("ssh", f"{job.id} poll failed: {e}")
                 job = self._note_connection_error(job)
                 if ftp_check_due(job.connection_errors) and self._maybe_presumed_complete(job, cfg):
@@ -561,10 +590,7 @@ class JobManager:
                         return
                     self._update(job, phase="error", error="pod disappeared before the job finished")
                     return
-                if fails > 1:
-                    time.sleep(cfg.progress_interval_seconds)
-                    continue
-            time.sleep(cfg.progress_interval_seconds)
+            self._wait_next(job.id, cfg.progress_interval_seconds, kind)
 
     def _finish_ok(self, job: Job, cfg: AppConfig, *, presumed: bool = False) -> None:
         job.phase = "complete"
@@ -583,6 +609,7 @@ class JobManager:
             except Exception as e:
                 job.message = f"{done} · download failed: {e}"
         self._save(job)
+        self._clear_next_check(job.id)
         ssh = self._ssh.pop(job.id, None)
         if ssh is not None:
             ssh.close()

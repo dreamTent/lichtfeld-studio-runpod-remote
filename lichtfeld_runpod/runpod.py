@@ -121,6 +121,7 @@ class RunpodClient:
         *,
         should_stop: Any = None,
         on_attempt: Any = None,
+        on_wait: Any = None,
         delay: float = 15,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -136,6 +137,8 @@ class RunpodClient:
                 log("runpod", msg)
                 if on_attempt:
                     on_attempt(msg)
+                if on_wait:
+                    on_wait(delay)
                 time.sleep(delay)
 
     def get_pod(self, pod_id: str) -> dict[str, Any]:
@@ -203,6 +206,7 @@ class RunpodClient:
         pod_id: str,
         *,
         should_stop: Any = None,
+        on_wait: Any = None,
     ) -> tuple[str, int] | None:
         i = 0
         while True:
@@ -213,6 +217,8 @@ class RunpodClient:
                 i += 1
                 if should_stop and should_stop(i):
                     return None
+                if on_wait:
+                    on_wait(5)
                 time.sleep(5)
                 continue
             endpoint = ssh_endpoint(pod)
@@ -222,6 +228,8 @@ class RunpodClient:
             i += 1
             if should_stop and should_stop(i):
                 return None
+            if on_wait:
+                on_wait(5)
             time.sleep(5)
 
     def terminate(self, pod_id: str) -> None:

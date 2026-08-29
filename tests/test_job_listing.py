@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -41,6 +42,27 @@ class JobListingTests(unittest.TestCase):
         data.pop("connection_errors", None)
         restored = Job.from_dict(data)
         self.assertEqual(restored.connection_errors, 0)
+
+    def test_snapshot_includes_next_check_countdown(self) -> None:
+        from lichtfeld_runpod.manager import JobManager
+
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running")
+            mgr.store.save(job)
+            mgr._set_next_check(job.id, 15, "poll")
+            snap = mgr.snapshot()
+            row = snap["jobs"][0]
+            self.assertEqual(row["next_check_kind"], "poll")
+            self.assertGreater(row["next_check_at"], time.time())
+            self.assertLessEqual(row["next_check_at"], time.time() + 16)
+            mgr._set_next_check(job.id, 8, "retry")
+            row = mgr.snapshot()["jobs"][0]
+            self.assertEqual(row["next_check_kind"], "retry")
+            mgr._clear_next_check(job.id)
+            row = mgr.snapshot()["jobs"][0]
+            self.assertIsNone(row["next_check_at"])
+            self.assertIsNone(row["next_check_kind"])
 
     def test_delete_removes_listing_not_results_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

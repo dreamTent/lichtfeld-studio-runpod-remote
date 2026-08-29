@@ -110,13 +110,37 @@ function lastUpdateLabel(job, checking) {
   if (checking) return "last update: checking…";
   const when = formatDateTime(job?.last_ssh_ok);
   const base = when === "—" ? "last update: —" : `last update: ${when}`;
-  return base + connectionErrorNote(job?.connection_errors);
+  return base + connectionErrorNote(job?.connection_errors) + countdownNote(job);
 }
 
 function lastUpdateValue(job, checking) {
   if (checking) return "checking…";
   const when = formatDateTime(job?.last_ssh_ok);
-  return when + connectionErrorNote(job?.connection_errors);
+  return when + connectionErrorNote(job?.connection_errors) + countdownNote(job);
+}
+
+function countdownNote(job) {
+  if (job?.next_check_at == null || ["complete", "error"].includes(job?.phase)) return "";
+  const at = Number(job.next_check_at);
+  if (!Number.isFinite(at)) return "";
+  const kind = job.next_check_kind === "retry" ? "retry" : "poll";
+  const left = Math.max(0, Math.ceil(at - Date.now() / 1000));
+  if (left <= 0) return kind === "retry" ? " · retrying…" : " · polling…";
+  return ` · ${left}s until next ${kind}`;
+}
+
+function tickCountdowns() {
+  $$("[data-countdown]").forEach((el) => {
+    const job = (state.data.jobs || []).find((j) => j.id === el.dataset.countdown);
+    if (!job) return;
+    const checking = state.reloading === job.id;
+    if (el.dataset.countdownWhere === "label") {
+      const row = mergedRows().find((r) => r.job?.id === job.id);
+      if (row) el.textContent = rowSubtitle(row);
+      return;
+    }
+    el.textContent = lastUpdateValue(job, checking);
+  });
 }
 
 function rowSubtitle(row) {
@@ -146,7 +170,9 @@ function renderLists() {
     li.append(orb(row.color));
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.innerHTML = `<strong>${esc(row.name)}</strong><span>${esc(rowSubtitle(row))}</span>`;
+    meta.innerHTML = `<strong>${esc(row.name)}</strong><span${
+      row.job ? ` data-countdown="${esc(row.job.id)}" data-countdown-where="label"` : ""
+    }>${esc(rowSubtitle(row))}</span>`;
     li.append(meta);
     li.addEventListener("click", () => select({ kind: row.kind, id: row.id }));
     list.append(li);
@@ -183,7 +209,7 @@ function renderDetail() {
   if (job) {
     kv.push(["Status", job.message || job.phase || "—"]);
     const checking = state.reloading === job.id;
-    kv.push(["Last update", lastUpdateValue(job, checking), checking ? "checking" : state.reloadFlash === job.id ? "flash" : ""]);
+    kv.push(["Last update", lastUpdateValue(job, checking), checking ? "checking" : state.reloadFlash === job.id ? "flash" : "", job.id]);
     kv.push(["Stage", job.stage || "—"]);
     kv.push(["GPU", `${job.gpu || "—"} / ${job.cloud || "—"}`]);
     kv.push(["Pod", job.pod_id || pod?.id || "—"]);
@@ -221,7 +247,7 @@ function renderDetail() {
   box.innerHTML = `
     <h3>${esc(title)}</h3>
     <div class="kv">${kv
-      .map(([k, v, cls]) => `<span>${esc(k)}</span><b${cls ? ` class="${cls}"` : ""}>${esc(v)}</b>`)
+      .map(([k, v, cls, id]) => `<span>${esc(k)}</span><b${cls ? ` class="${cls}"` : ""}${id ? ` data-countdown="${esc(id)}"` : ""}>${esc(v)}</b>`)
       .join("")}</div>
     ${actions}
     <pre class="log">${esc(log)}</pre>
@@ -468,6 +494,7 @@ async function boot() {
       /* ignore */
     }
   };
+  setInterval(tickCountdowns, 1000);
 }
 
 boot();

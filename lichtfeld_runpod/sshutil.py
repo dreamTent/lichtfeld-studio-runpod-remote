@@ -340,7 +340,12 @@ class Ssh:
         quoted = shlex.quote(text)
         self.run(f"umask 077; printf %s {quoted} > {shlex.quote(remote)}; chmod {mode} {shlex.quote(remote)}")
 
-    def wait_ready(self, *, should_stop: Callable[[int], bool] | None = None) -> bool:
+    def wait_ready(
+        self,
+        *,
+        should_stop: Callable[[int], bool] | None = None,
+        on_wait: Callable[[float], None] | None = None,
+    ) -> bool:
         last = ""
         i = 0
         while True:
@@ -359,4 +364,6 @@ class Ssh:
             log("ssh", f"retry {i} {tail}")
             if should_stop and should_stop(i):
                 return False
+            if on_wait:
+                on_wait(20)
             time.sleep(20)
