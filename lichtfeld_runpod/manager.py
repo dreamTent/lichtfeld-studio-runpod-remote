@@ -50,6 +50,11 @@ class JobManager:
 
     def stop(self) -> None:
         self._stop.set()
+        with self._lock:
+            sessions = list(self._ssh.values())
+            self._ssh.clear()
+        for ssh in sessions:
+            ssh.close()
 
     def submit(self, spec: dict[str, Any]) -> Job:
         now = time.time()
@@ -105,7 +110,9 @@ class JobManager:
             raise KeyError(job_id)
         with self._lock:
             self._dropped.add(job_id)
-            self._ssh.pop(job_id, None)
+            ssh = self._ssh.pop(job_id, None)
+        if ssh is not None:
+            ssh.close()
         self.store.delete(job_id)
         log("job", f"{job_id} removed from listing (FTP/local results kept)")
 
@@ -576,7 +583,9 @@ class JobManager:
             except Exception as e:
                 job.message = f"{done} · download failed: {e}"
         self._save(job)
-        self._ssh.pop(job.id, None)
+        ssh = self._ssh.pop(job.id, None)
+        if ssh is not None:
+            ssh.close()
 
 
 CONNECTION_ERROR_NOTE = "connection error"

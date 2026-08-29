@@ -26,13 +26,12 @@ POLL_CMD = (
     "echo HB:$(cat /workspace/state/HEARTBEAT 2>/dev/null || echo); "
     "echo ERR:$(test -f /workspace/state/ERROR && echo 1 || echo 0); "
     "echo PIDOK:$(if [ -f /workspace/state/job.pid ] && kill -0 $(cat /workspace/state/job.pid) 2>/dev/null; then echo 1; else echo 0; fi); "
-    "python3 - <<'PY'\n"
-    "from pathlib import Path\n"
-    "p=Path('/workspace/logs/nohup.out')\n"
-    "t=p.read_text(errors='replace') if p.exists() else ''\n"
-    "i=t.rfind('Training [')\n"
-    "print('TRAIN:'+(t[i:].splitlines()[0][:240] if i>=0 else ''))\n"
-    "PY"
+    "python3 -c '"
+    'from pathlib import Path; p=Path("/workspace/logs/nohup.out"); '
+    't=p.read_text(errors="replace") if p.exists() else ""; '
+    'i=t.rfind("Training ["); '
+    'print("TRAIN:"+(t[i:].splitlines()[0][:240] if i>=0 else ""))'
+    "'"
 )
 
 LOG_TAIL_CMD = (
@@ -95,30 +94,33 @@ def run_job(cfg: AppConfig, workdir: Path) -> int:
     ssh_config = run_dir / "ssh_config"
     write_ssh_config(ssh_config, host, port, cfg.ssh.identity_file)
     ssh = Ssh(ssh_config)
-    if not ssh.wait_ready(should_stop=stop_if_ftp_done):
-        return _finish_from_ftp(cfg)
+    try:
+        if not ssh.wait_ready(should_stop=stop_if_ftp_done):
+            return _finish_from_ftp(cfg)
 
-    gpu_line = ssh.check_output("nvidia-smi -L && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader")
-    log("gpu", gpu_line.strip().replace("\n", " | "))
+        gpu_line = ssh.check_output("nvidia-smi -L && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader")
+        log("gpu", gpu_line.strip().replace("\n", " | "))
 
-    inject_and_start(ssh, cfg, run_dir, pod_id, build_bytes, dataset_bytes)
+        inject_and_start(ssh, cfg, run_dir, pod_id, build_bytes, dataset_bytes)
 
-    rc = _watch_progress(ssh, cfg, build_bytes, dataset_bytes, client=client, pod_id=pod_id)
+        rc = _watch_progress(ssh, cfg, build_bytes, dataset_bytes, client=client, pod_id=pod_id)
 
-    if rc == 0:
-        names = verify_uploaded(cfg.storage, cfg.storage.result_dir)
-        if names:
-            log("result", f"{cfg.storage.result_dir}: " + ", ".join(names))
+        if rc == 0:
+            names = verify_uploaded(cfg.storage, cfg.storage.result_dir)
+            if names:
+                log("result", f"{cfg.storage.result_dir}: " + ", ".join(names))
+            else:
+                log("result", f"uploaded to {cfg.storage.result_dir} (include REPORT.md + train.log)")
+            if cfg.terminate_when_done:
+                log("pod", f"{pod_id} will self-terminate after upload")
+            else:
+                log("pod", f"left running: {pod_id}  ssh root@{host} -p {port}")
         else:
-            log("result", f"uploaded to {cfg.storage.result_dir} (include REPORT.md + train.log)")
-        if cfg.terminate_when_done:
-            log("pod", f"{pod_id} will self-terminate after upload")
-        else:
-            log("pod", f"left running: {pod_id}  ssh root@{host} -p {port}")
-    else:
-        log("job", f"remote job failed rc={rc}")
-        _dump_failure(ssh)
-    return rc
+            log("job", f"remote job failed rc={rc}")
+            _dump_failure(ssh)
+        return rc
+    finally:
+        ssh.close()
 
 
 def _finish_from_ftp(cfg: AppConfig) -> int:
