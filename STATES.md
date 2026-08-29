@@ -64,3 +64,14 @@ These are written to `/workspace/state/STAGE` on the pod. They are the job’s `
 | `done` | Finished on the pod (then it may self-terminate) |
 
 The dashboard subtitle shows `job.message` when set (progress text, `connection lost`, `complete`, `completed (presumably)`, …), otherwise the phase name.
+
+## Archive and delete (listing only)
+
+The dashboard can **archive** or **remove** a job from the list. Neither action deletes:
+
+- the FTP result folder
+- local downloads under `results/`
+- a GPU pod that is still running (use terminate when that exists)
+
+**Archive** hides the job under the Archived tab; Unarchive brings it back. **Remove from list** deletes the client record (`.run/jobs/<id>.json` and that job’s SSH workdir). A running watch thread is stopped so it cannot recreate the listing.
+

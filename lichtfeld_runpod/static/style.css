@@ -48,6 +48,12 @@ main { padding: 18px 22px 40px; }
 }
 .orb-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .orb-legend .orb { margin: 0; }
+.list-tabs { display: flex; gap: 6px; margin: 0 0 8px; }
+.list-tabs button {
+  background: transparent; color: var(--muted); border: 1px solid transparent; padding: 4px 10px; cursor: pointer;
+  border-radius: 999px; font: inherit; font-size: 12px;
+}
+.list-tabs button.active, .list-tabs button:hover { color: var(--ink); border-color: var(--line); }
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--panel); }
 .rows li {
   display: flex; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--line);
@@ -83,6 +89,15 @@ main { padding: 18px 22px 40px; }
   display: flex; flex-direction: column; gap: 12px;
 }
 .detail h3 { margin: 0; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.detail-actions .note { flex: 1 1 100%; }
+.detail-actions button {
+  background: #0b0d10; color: var(--ink); border: 1px solid var(--line);
+  padding: 6px 12px; cursor: pointer; border-radius: 6px; font: inherit;
+}
+.detail-actions button:hover { border-color: var(--muted); }
+.detail-actions button.danger { color: var(--red); border-color: #5a2430; }
+.detail-actions button.danger:hover { background: #2a1218; }
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; color: var(--muted); }
 .kv b { color: var(--ink); font-weight: 500; }
 .log {

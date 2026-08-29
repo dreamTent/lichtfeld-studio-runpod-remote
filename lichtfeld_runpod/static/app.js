@@ -5,6 +5,7 @@ const state = {
   view: "dash",
   selected: null, // { kind: 'job'|'pod', id }
   data: { jobs: [], pods: [] },
+  listFilter: "current",
 };
 
 function showView(name) {
@@ -25,6 +26,14 @@ $$("nav [data-view]").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
     showView(btn.dataset.view);
+  });
+});
+
+$$("[data-list]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.listFilter = btn.dataset.list;
+    $$("[data-list]").forEach((b) => b.classList.toggle("active", b.dataset.list === state.listFilter));
+    renderLists();
   });
 });
 
@@ -63,9 +72,11 @@ function orb(color) {
 }
 
 function mergedRows() {
-  const jobs = state.data.jobs || [];
+  const allJobs = state.data.jobs || [];
+  const archived = state.listFilter === "archived";
+  const jobs = allJobs.filter((j) => Boolean(j.archived) === archived);
   const pods = state.data.pods || [];
-  const claimed = new Set(jobs.map((j) => j.pod_id).filter(Boolean));
+  const claimed = new Set(allJobs.map((j) => j.pod_id).filter(Boolean));
   const rows = jobs.map((job) => {
     const pod = pods.find((p) => p.job_id === job.id || p.id === job.pod_id) || null;
     return { kind: "job", id: job.id, job, pod, color: job.color, name: job.name };
@@ -93,7 +104,7 @@ function renderLists() {
   list.innerHTML = "";
   const rows = mergedRows();
   if (!rows.length) {
-    list.innerHTML = `<li class="empty">No jobs yet.</li>`;
+    list.innerHTML = `<li class="empty">${state.listFilter === "archived" ? "No archived jobs." : "No jobs yet."}</li>`;
   }
   for (const row of rows) {
     const li = document.createElement("li");
@@ -106,7 +117,10 @@ function renderLists() {
     li.addEventListener("click", () => select({ kind: row.kind, id: row.id }));
     list.append(li);
   }
-  if (state.selected) renderDetail();
+  if (state.selected && !rows.some((r) => r.kind === state.selected.kind && r.id === state.selected.id)) {
+    state.selected = null;
+  }
+  renderDetail();
 }
 
 function select(sel) {
@@ -124,7 +138,8 @@ function renderDetail() {
   }
   const row = mergedRows().find((r) => r.kind === state.selected.kind && r.id === state.selected.id);
   if (!row) {
-    box.innerHTML = `<p class="empty">Gone.</p>`;
+    state.selected = null;
+    box.innerHTML = `<p class="empty">Select a job.</p>`;
     return;
   }
   const job = row.job;
@@ -149,11 +164,50 @@ function renderDetail() {
     kv.push(["Control", "foreign (not started by this app)"]);
   }
   const log = job?.log_tail || job?.message || "";
+  const actions = job
+    ? `<div class="detail-actions">
+        <p class="note">Archive or remove hides this listing only. FTP results and local downloads stay.</p>
+        ${
+          job.archived
+            ? `<button type="button" data-act="unarchive">Unarchive</button>`
+            : `<button type="button" data-act="archive">Archive</button>`
+        }
+        <button type="button" data-act="delete" class="danger">Remove from list</button>
+      </div>`
+    : "";
   box.innerHTML = `
     <h3>${esc(title)}</h3>
     <div class="kv">${kv.map(([k, v]) => `<span>${esc(k)}</span><b>${esc(v)}</b>`).join("")}</div>
+    ${actions}
     <pre class="log">${esc(log)}</pre>
   `;
+  box.querySelector("[data-act=archive]")?.addEventListener("click", () => archiveJob(job.id, true));
+  box.querySelector("[data-act=unarchive]")?.addEventListener("click", () => archiveJob(job.id, false));
+  box.querySelector("[data-act=delete]")?.addEventListener("click", () => deleteJobListing(job.id));
+}
+
+async function archiveJob(jobId, archived) {
+  try {
+    await api(`/api/jobs/${jobId}/${archived ? "archive" : "unarchive"}`, { method: "POST" });
+    if (state.selected?.kind === "job" && state.selected.id === jobId) state.selected = null;
+    applySnapshot(await api("/api/state"));
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function deleteJobListing(jobId) {
+  const ok = window.confirm(
+    "Remove this job from the list? FTP results and any local downloads are not deleted. A running GPU pod is left as-is."
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/jobs/${jobId}`, { method: "DELETE" });
+    if (state.selected?.kind === "job" && state.selected.id === jobId) state.selected = null;
+    applySnapshot(await api("/api/state"));
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 function esc(s) {

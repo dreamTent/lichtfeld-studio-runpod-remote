@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LichtFeld · RunPod</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
   <header class="top">
@@ -34,6 +34,10 @@
               <span><span class="orb green" aria-hidden="true"></span> running</span>
               <span><span class="orb teal" aria-hidden="true"></span> finished</span>
             </p>
+            <div class="list-tabs">
+              <button type="button" data-list="current" class="active">Current</button>
+              <button type="button" data-list="archived">Archived</button>
+            </div>
             <ul id="item-list" class="rows"></ul>
           </section>
         </div>
@@ -117,6 +121,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

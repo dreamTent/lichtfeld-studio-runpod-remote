@@ -38,6 +38,7 @@ class JobManager:
         self._api_pods: list[dict[str, Any]] = []
         self._api_pods_at = 0.0
         self._loop_thread: threading.Thread | None = None
+        self._dropped: set[str] = set()
 
     def start(self) -> None:
         self._reconcile_from_ftp()
@@ -91,6 +92,22 @@ class JobManager:
 
     def jobs(self) -> list[Job]:
         return self.store.all()
+
+    def set_archived(self, job_id: str, archived: bool) -> Job:
+        job = self.store.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return self._update(job, archived=archived)
+
+    def delete_listing(self, job_id: str) -> None:
+        job = self.store.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        with self._lock:
+            self._dropped.add(job_id)
+            self._ssh.pop(job_id, None)
+        self.store.delete(job_id)
+        log("job", f"{job_id} removed from listing (FTP/local results kept)")
 
     def snapshot(self) -> dict[str, Any]:
         jobs = self.store.all()
@@ -229,6 +246,8 @@ class JobManager:
             thread.start()
 
     def _save(self, job: Job) -> None:
+        if job.id in self._dropped:
+            return
         self.store.save(job)
 
     def _update(self, job: Job, **fields: Any) -> Job:
@@ -256,7 +275,7 @@ class JobManager:
 
     def _run_job(self, job_id: str) -> None:
         job = self.store.get(job_id)
-        if job is None:
+        if job is None or job_id in self._dropped:
             return
         try:
             if job.phase in {"complete", "error"}:
@@ -269,6 +288,8 @@ class JobManager:
             if job.dataset_source == "local" and job.phase in {"created", "uploading_dataset"}:
                 self._upload_local_dataset(job, cfg, run_dir, netrc)
                 job = self.store.get(job_id) or job
+            if job_id in self._dropped or self.store.get(job_id) is None:
+                return
 
             if job.phase in {"created", "uploading_dataset"}:
                 self._update(job, phase="waiting_for_pod", message="waiting for GPU")
@@ -276,17 +297,21 @@ class JobManager:
             if not job.pod_id:
                 self._create_pod(job, cfg)
                 job = self.store.get(job_id) or job
+            if job_id in self._dropped or self.store.get(job_id) is None:
+                return
 
             if job.pod_id and not job.injected:
                 self._inject(job, cfg, run_dir)
                 job = self.store.get(job_id) or job
+            if job_id in self._dropped or self.store.get(job_id) is None:
+                return
 
             if job.injected and job.phase not in {"complete", "error"}:
                 self._watch(job, cfg)
         except Exception as e:
             log("job", f"{job_id} failed: {e}")
             job = self.store.get(job_id)
-            if job and job.phase not in {"complete"}:
+            if job and job.phase not in {"complete"} and job_id not in self._dropped:
                 self._update(job, phase="error", error=str(e), message=str(e))
 
     def _upload_local_dataset(self, job: Job, cfg: AppConfig, run_dir: Path, netrc: Path) -> None:
@@ -316,7 +341,7 @@ class JobManager:
                 self._update(current, message=msg)
 
         pod = client.create_pod_retry(
-            should_stop=self._stop.is_set,
+            should_stop=lambda: self._stop.is_set() or job.id in self._dropped,
             on_attempt=on_attempt,
             name=job.name,
             image=cfg.runpod.image,
@@ -394,7 +419,12 @@ class JobManager:
         client = RunpodClient(cfg.runpod.api_key)
         fails = 0
         while not self._stop.is_set():
-            job = self.store.get(job.id) or job
+            if job.id in self._dropped:
+                return
+            stored = self.store.get(job.id)
+            if stored is None:
+                return
+            job = stored
             if job.phase == "complete":
                 return
             try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 import string
 import time
 import uuid
@@ -56,6 +57,7 @@ class Job:
     build_bytes: int | None = None
     dataset_bytes: int | None = None
     injected: bool = False
+    archived: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,3 +102,14 @@ class JobStore:
                 continue
         jobs.sort(key=lambda j: j.created_at, reverse=True)
         return jobs
+
+    def delete(self, job_id: str) -> bool:
+        """Remove the listing record and job workdir. Does not touch FTP or downloaded results."""
+        path = self.path(job_id)
+        existed = path.is_file()
+        if existed:
+            path.unlink()
+        work = self.root / job_id
+        if work.is_dir():
+            shutil.rmtree(work, ignore_errors=True)
+        return existed

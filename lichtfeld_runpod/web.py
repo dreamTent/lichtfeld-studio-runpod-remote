@@ -165,6 +165,28 @@ def create_app(workdir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return job.to_dict()
 
+    @app.post("/api/jobs/{job_id}/archive")
+    def archive_job(job_id: str) -> dict:
+        try:
+            return manager.set_archived(job_id, True).to_dict()
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+
+    @app.post("/api/jobs/{job_id}/unarchive")
+    def unarchive_job(job_id: str) -> dict:
+        try:
+            return manager.set_archived(job_id, False).to_dict()
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str) -> dict:
+        try:
+            manager.delete_listing(job_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+        return {"ok": True, "id": job_id}
+
     @app.get("/api/pods")
     def list_pods() -> dict:
         return {"pods": manager.snapshot()["pods"]}
