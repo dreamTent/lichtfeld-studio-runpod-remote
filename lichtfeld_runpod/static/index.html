@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LichtFeld · RunPod</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
   <header class="top">
@@ -18,7 +18,7 @@
     <nav>
       <button type="button" data-view="dash" class="active">Dashboard</button>
       <button type="button" data-view="new">New job</button>
-      <button type="button" data-view="build" disabled title="Coming soon">Create build</button>
+      <button type="button" data-view="build">Create build</button>
       <button type="button" data-view="settings">Settings</button>
     </nav>
     <p class="hint" id="config-hint" hidden>Configure secrets in Settings before starting a job.</p>
@@ -125,6 +125,49 @@
       </form>
     </section>
 
+    <section id="view-build" class="view" hidden>
+      <form id="build-form" class="panel">
+        <h2>Create LichtFeld build</h2>
+        <p class="note">Spins up a GPU pod, compiles LichtFeld Studio (~45 min on L40S), uploads the archive to FTP, then the pod stops itself. Same image and disk as training jobs (150 GB volume).</p>
+        <label>Name <input name="name" id="build-name" required placeholder="20260829-001215-abcxyz"></label>
+        <label>GPU
+          <select name="gpu" id="build-gpu" required>
+            <option value="NVIDIA L40S">NVIDIA L40S</option>
+          </select>
+        </label>
+        <label>Cloud
+          <select name="cloud">
+            <option value="SECURE">SECURE</option>
+            <option value="COMMUNITY">COMMUNITY</option>
+            <option value="AUTO">AUTO</option>
+          </select>
+        </label>
+        <label>Git tag or branch
+          <input name="git_ref" id="build-git-ref" value="v0.5.3" placeholder="v0.5.3">
+        </label>
+        <label>CUDA architecture (sm_)
+          <input name="cuda_arch" id="build-cuda-arch" value="89" placeholder="89">
+        </label>
+        <p class="note">Must match the GPU family. L40S / Ada = 89. A different GPU needs a new build.</p>
+        <label>GitHub repo
+          <input name="repo_url" id="build-repo" placeholder="https://github.com/MrNeRF/LichtFeld-Studio.git">
+        </label>
+        <label>RunPod image
+          <input name="image" id="build-image" placeholder="runpod/pytorch:…">
+        </label>
+        <label>FTP folder
+          <input name="result_dir" id="build-result-dir" placeholder="lichtfeld-builds/lichtfeld-0.5.3-l40s-sm89-260829">
+        </label>
+        <label>Archive file name
+          <input name="archive_name" id="build-archive-name" placeholder="lichtfeld-0.5.3-l40s-sm89.tar.gz">
+        </label>
+        <label class="inline"><input type="checkbox" name="auto_download"> Download the archive to this machine when done</label>
+        <label class="inline"><input type="checkbox" name="terminate_when_done" checked> Pod self-terminates after FTP upload</label>
+        <p class="form-error" id="build-error" hidden></p>
+        <button type="button" id="build-start">Start build</button>
+      </form>
+    </section>
+
     <section id="view-settings" class="view" hidden>
       <form id="settings-form" class="panel">
         <h2>Secrets</h2>
@@ -145,6 +188,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/app.js?v=13"></script>
+  <script src="/static/app.js?v=14"></script>
 </body>
 </html>

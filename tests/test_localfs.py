@@ -31,6 +31,9 @@ class StaticFormTests(unittest.TestCase):
         self.assertIn('id="pick-config"', html)
         self.assertIn('id="config-local"', html)
         self.assertIn('id="upload-as-is"', html)
+        self.assertIn('id="build-start"', html)
+        self.assertIn('id="build-form"', html)
+        self.assertNotIn('data-view="build" disabled', html)
         js = (
             Path(__file__).resolve().parents[1]
             / "lichtfeld_runpod"
@@ -41,6 +44,8 @@ class StaticFormTests(unittest.TestCase):
         self.assertIn('e.target.id === "job-start"', js)
         self.assertIn("open-results", js)
         self.assertIn("local_results_ready", js)
+        self.assertIn('kind: "build"', js)
+        self.assertIn("submitBuild", js)
 
 
 class DatasetsDirTests(unittest.TestCase):

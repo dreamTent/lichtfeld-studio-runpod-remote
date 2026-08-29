@@ -5,6 +5,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .buildspec import (
+    DEFAULT_GIT_REF,
+    DEFAULT_REPO,
+    default_archive_name,
+    default_build_folder,
+    normalize_cuda_arch,
+    normalize_git_ref,
+    normalize_repo_url,
+)
 from .config import AppConfig, ConfigError, config_for_job, load_app_config
 from .host import open_in_file_manager
 from .jobs import PRESUMED_COMPLETE_MESSAGE, Job, JobStore, default_job_name, new_id
@@ -72,18 +81,47 @@ class JobManager:
     def submit(self, spec: dict[str, Any]) -> Job:
         now = time.time()
         job_id = new_id()
+        kind = str(spec.get("kind") or "train").strip().lower() or "train"
+        if kind not in {"train", "build"}:
+            raise ValueError("kind must be train or build")
         name = str(spec.get("name") or "").strip() or default_job_name()
-        result_dir = str(spec.get("result_dir") or f"lichtfeld-results/{name}-{job_id}")
+        gpu = str(spec.get("gpu") or "NVIDIA L40S")
+        git_ref = ""
+        cuda_arch = ""
+        repo_url = ""
+        archive_name = ""
+        if kind == "build":
+            git_ref = normalize_git_ref(str(spec.get("git_ref") or DEFAULT_GIT_REF))
+            cuda_arch = normalize_cuda_arch(str(spec.get("cuda_arch") or ""), gpu)
+            repo_url = normalize_repo_url(str(spec.get("repo_url") or DEFAULT_REPO))
+            archive_name = str(spec.get("archive_name") or "").strip() or default_archive_name(
+                git_ref, gpu, cuda_arch
+            )
+            if "/" in archive_name or archive_name.startswith("."):
+                raise ValueError("archive name must be a file name, not a path")
+            result_dir = str(spec.get("result_dir") or "").strip() or default_build_folder(
+                git_ref, gpu, cuda_arch
+            )
+            build_archive = f"{result_dir.strip('/')}/{archive_name}"
+            dataset_source = "ftp"
+            dataset_archive = ""
+            dataset_local = ""
+        else:
+            result_dir = str(spec.get("result_dir") or f"lichtfeld-results/{name}-{job_id}")
+            build_archive = str(spec.get("build_archive") or "")
+            dataset_source = str(spec.get("dataset_source") or "ftp")
+            dataset_archive = str(spec.get("dataset_archive") or "")
+            dataset_local = str(spec.get("dataset_local") or "")
         job = Job(
             id=job_id,
             name=name,
             phase="created",
-            gpu=str(spec.get("gpu") or "NVIDIA L40S"),
+            gpu=gpu,
             cloud=str(spec.get("cloud") or "SECURE").upper(),
-            build_archive=str(spec.get("build_archive") or ""),
-            dataset_archive=str(spec.get("dataset_archive") or ""),
-            dataset_source=str(spec.get("dataset_source") or "ftp"),
-            dataset_local=str(spec.get("dataset_local") or ""),
+            build_archive=build_archive,
+            dataset_archive=dataset_archive,
+            dataset_source=dataset_source,
+            dataset_local=dataset_local,
             result_dir=result_dir.strip("/"),
             config_rel=str(spec.get("config") or "").strip(),
             auto_download=bool(spec.get("auto_download", False)),
@@ -97,21 +135,27 @@ class JobManager:
             message="created",
             created_at=now,
             updated_at=now,
+            kind=kind,
+            git_ref=git_ref,
+            cuda_arch=cuda_arch,
+            repo_url=repo_url,
+            archive_name=archive_name,
         )
-        if job.dataset_source == "ftp" and not job.dataset_archive:
-            raise ValueError("select a dataset archive on the FTP server")
-        if job.dataset_source == "local" and not job.dataset_local:
-            raise ValueError("select a local dataset folder or archive")
-        if job.dataset_source == "local":
-            local = Path(job.dataset_local).expanduser()
-            if not local.exists():
-                raise ValueError(f"local dataset not found: {local}")
-        if job.config_local:
-            cfg_path = Path(job.config_local).expanduser()
-            if not cfg_path.is_file():
-                raise ValueError(f"LichtFeld config not found: {cfg_path}")
-        if not job.build_archive:
-            raise ValueError("select a LichtFeld build from the FTP server")
+        if kind == "train":
+            if job.dataset_source == "ftp" and not job.dataset_archive:
+                raise ValueError("select a dataset archive on the FTP server")
+            if job.dataset_source == "local" and not job.dataset_local:
+                raise ValueError("select a local dataset folder or archive")
+            if job.dataset_source == "local":
+                local = Path(job.dataset_local).expanduser()
+                if not local.exists():
+                    raise ValueError(f"local dataset not found: {local}")
+            if job.config_local:
+                cfg_path = Path(job.config_local).expanduser()
+                if not cfg_path.is_file():
+                    raise ValueError(f"LichtFeld config not found: {cfg_path}")
+            if not job.build_archive:
+                raise ValueError("select a LichtFeld build from the FTP server")
         self._save(job)
         self._spawn(job.id)
         return job
@@ -553,7 +597,7 @@ class JobManager:
             netrc = run_dir / "netrc"
             write_netrc(netrc, cfg.storage)
 
-            if job.dataset_source == "local" and job.phase in {"created", "uploading_dataset"}:
+            if job.kind != "build" and job.dataset_source == "local" and job.phase in {"created", "uploading_dataset"}:
                 self._upload_local_dataset(job, cfg, run_dir, netrc)
                 job = self.store.get(job_id) or job
                 cfg = self._cfg_for(job)
@@ -706,6 +750,23 @@ class JobManager:
             return
         self._ssh[job.id] = ssh
         self._clear_next_check(job.id)
+
+        if job.kind == "build":
+            inject_and_start(
+                ssh,
+                cfg,
+                run_dir,
+                job.pod_id,
+                None,
+                None,
+                kind="build",
+                git_ref=job.git_ref,
+                cuda_arch=job.cuda_arch,
+                repo_url=job.repo_url,
+                archive_name=job.archive_name,
+            )
+            self._update(job, injected=True, phase="running", last_ssh_ok=time.time(), message="build started")
+            return
 
         build_bytes = job.build_bytes or remote_size(cfg.storage, cfg.storage.build_archive)
         dataset_bytes = job.dataset_bytes or remote_size(cfg.storage, cfg.storage.dataset_archive)
