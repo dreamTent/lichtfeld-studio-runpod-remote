@@ -40,6 +40,7 @@ class JobManager:
         self._loop_thread: threading.Thread | None = None
         self._dropped: set[str] = set()
         self._next_check: dict[str, tuple[float, str]] = {}
+        self._next_pod_list_at: float | None = None
 
     def start(self) -> None:
         self._reconcile_from_ftp()
@@ -178,6 +179,7 @@ class JobManager:
         pod_color_by_job = {p["job_id"]: p["color"] for p in pod_rows if p.get("job_id")}
         with self._lock:
             pending = dict(self._next_check)
+            next_pod_list_at = self._next_pod_list_at
         for job in jobs:
             next_at, kind = pending.get(job.id, (None, None))
             job_rows.append(
@@ -188,14 +190,18 @@ class JobManager:
                     "next_check_kind": kind,
                 }
             )
-        return {"jobs": job_rows, "pods": pod_rows}
+        return {"jobs": job_rows, "pods": pod_rows, "next_pod_list_at": next_pod_list_at}
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            with self._lock:
+                self._next_pod_list_at = None
             try:
                 self._refresh_pods()
             except Exception as e:
                 log("manager", f"list pods: {e}")
+            with self._lock:
+                self._next_pod_list_at = time.time() + POLL_SECONDS
             self._stop.wait(POLL_SECONDS)
 
     def _refresh_pods(self) -> None:

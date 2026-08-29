@@ -56,6 +56,7 @@ class JobListingTests(unittest.TestCase):
             self.assertEqual(row["next_check_kind"], "poll")
             self.assertGreater(row["next_check_at"], time.time())
             self.assertLessEqual(row["next_check_at"], time.time() + 16)
+            self.assertIsNone(snap["next_pod_list_at"])
             mgr._set_next_check(job.id, 8, "retry")
             row = mgr.snapshot()["jobs"][0]
             self.assertEqual(row["next_check_kind"], "retry")
@@ -63,6 +64,11 @@ class JobListingTests(unittest.TestCase):
             row = mgr.snapshot()["jobs"][0]
             self.assertIsNone(row["next_check_at"])
             self.assertIsNone(row["next_check_kind"])
+            with mgr._lock:
+                mgr._next_pod_list_at = time.time() + 8
+            later = mgr.snapshot()
+            self.assertGreater(later["next_pod_list_at"], time.time())
+            self.assertLessEqual(later["next_pod_list_at"], time.time() + 9)
 
     def test_delete_removes_listing_not_results_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

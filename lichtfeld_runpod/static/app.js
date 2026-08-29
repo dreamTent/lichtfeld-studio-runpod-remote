@@ -141,6 +141,18 @@ function tickCountdowns() {
     }
     el.textContent = lastUpdateValue(job, checking);
   });
+  const podList = $("[data-pod-list-countdown]");
+  if (podList) podList.textContent = podListCountdownText();
+}
+
+function podListCountdownText() {
+  const raw = state.data?.next_pod_list_at;
+  if (raw == null) return "listing pods…";
+  const at = Number(raw);
+  if (!Number.isFinite(at)) return "listing pods…";
+  const left = Math.max(0, Math.ceil(at - Date.now() / 1000));
+  if (left <= 0) return "listing pods…";
+  return `${left}s until next pod list`;
 }
 
 function rowSubtitle(row) {
@@ -180,6 +192,7 @@ function renderLists() {
   if (state.selected && !rows.some((r) => r.kind === state.selected.kind && r.id === state.selected.id)) {
     state.selected = null;
   }
+  tickCountdowns();
   renderDetail();
 }
 

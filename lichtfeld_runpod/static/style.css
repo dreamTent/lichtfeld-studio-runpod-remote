@@ -42,6 +42,10 @@ main { padding: 18px 22px 40px; }
 .split { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 18px; min-height: 70vh; }
 .lists { display: flex; flex-direction: column; gap: 18px; }
 .lists h2, .panel h2 { font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.lists h2 { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pod-list-timer {
+  font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 400; color: var(--muted);
+}
 .orb-legend {
   display: flex; flex-wrap: wrap; gap: 10px 14px; margin: 0 0 8px; padding: 0;
   color: var(--muted); font-size: 11px; letter-spacing: 0.02em;
