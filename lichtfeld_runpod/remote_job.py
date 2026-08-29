@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .config import AppConfig
-from .storage import curl_url
+from .config import AppConfig, StorageConfig
+from .storage import curl_url, staging_remote_path
 
 
 def render_job_script(
@@ -31,9 +31,11 @@ def render_job_script(
     config_rel = lf.config
     build_url = curl_url(cfg.storage, cfg.storage.build_archive)
     dataset_url = curl_url(cfg.storage, cfg.storage.dataset_archive)
-    result = cfg.storage.result_dir
+    result = cfg.storage.result_dir.rstrip("/")
+    result_staging = staging_remote_path(result)
     extra_ftp = "--ftp-pasv" if cfg.storage.protocol == "ftp" else ""
     terminate = "1" if cfg.terminate_when_done else "0"
+    rename_results = _rename_remote_cmd(cfg.storage, result_staging, result)
 
     return f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -45,6 +47,7 @@ REPORTDIR="$ROOT/report"
 DATASET_TAR="$ROOT/dataset/scene.tar"
 BUILD_TGZ="$ROOT/lichtfeld-build.tar.gz"
 RESULT_DIR={_bash_quote(result)}
+RESULT_STAGING={_bash_quote(result_staging)}
 BUILD_URL={_bash_quote(build_url)}
 DATASET_URL={_bash_quote(dataset_url)}
 BUILD_BYTES={build_bytes if build_bytes is not None else 0}
@@ -246,8 +249,8 @@ print("wrote REPORT.md")
 PY
 
 stage upload
-# RESULT_URL is scheme://host:port/result_dir/
-RESULT_URL={_bash_quote(curl_url(cfg.storage, result.rstrip("/") + "/"))}
+# RESULT_URL is scheme://host:port/result_dir.upload/
+RESULT_URL={_bash_quote(curl_url(cfg.storage, result_staging + "/"))}
 upload_file() {{
   local src="$1" dest="$2"
   # shellcheck disable=SC2086
@@ -265,6 +268,9 @@ while IFS= read -r -d '' f; do
   upload_file "$f" "output/${{rel}}"
 done < <(find "$OUTDIR" -type f \\( -name '*.ply' -o -name '*.json' -o -name '*.resume' \\) -print0)
 
+log "renaming $RESULT_STAGING -> $RESULT_DIR"
+{rename_results}
+
 mark_done upload
 stage done
 log "Job complete"
@@ -280,6 +286,24 @@ if [[ "$TERMINATE" == "1" && -s /root/.runpod_api && -n "$POD_ID" ]]; then
     -H "User-Agent: lichtfeld-runpod" || log "self-terminate request failed"
 fi
 """
+
+
+def _rename_remote_cmd(cfg: StorageConfig, src: str, dest: str) -> str:
+    """curl command that renames a remote file or directory (uses $CURL_EXTRA)."""
+    root = _bash_quote(curl_url(cfg, ""))
+    extra = "$CURL_EXTRA"
+    if cfg.protocol == "ftp":
+        return (
+            f"curl --netrc --fail {extra} "
+            f"-Q {_bash_quote('-RNFR ' + src)} "
+            f"-Q {_bash_quote('-RNTO ' + dest)} "
+            f"{root}"
+        )
+    return (
+        f"curl --netrc --fail {extra} "
+        f"-Q {_bash_quote('-rename "' + src + '" "' + dest + '"')} "
+        f"{root}"
+    )
 
 
 def _bash_quote(value: str) -> str:

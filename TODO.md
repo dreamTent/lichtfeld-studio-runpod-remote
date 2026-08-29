@@ -23,22 +23,24 @@ todo:
 - [ ] create setup and start script for windows so users just have to execute a bat file
 - [ ] create a setup and start script for linux users (debian/ubuntu)
 - [ ] check app compatible with windows and linux (debian/ubuntu)
+- [ ] i want to be able to create multiple jobs with the same dataset with diffferent config files. this should also be compatible with uploading. give the option to select a different jobs upload as dataset, and wait for it to finish before starting
 
 
 
-- make pod list refresh do every 30 seconds
-- make enter not create job
-- add field for entering runpod image template name (or modifying it from default)
-- [ ] ftp uploads should end with .upload and then be renamed after the upload completes
-- [ ] when the remote server uploads to the ftp server it appends .upload to the folder and then renames the folder after all containing files are uploaded to the ftp server
+## before releaser
+- [ ] make pod list refresh do every 30 seconds
+- [ ] make pressing enter in a field in the new job menu not create job as it could be pressed accidentally
+- [ ] add field for entering runpod image template name in the new job menu (or modifying it from default)
+- [x] ftp uploads should end with .upload and then be renamed after the upload completes
+- [x] when the remote server uploads the results to the ftp server it appends .upload to the folder and then renames the folder after all containing files are uploaded to the ftp server
 
-- [ ] allow for a seperate config file to be uploaded
+- [ ] add option to abort ftp upload
+
+- [ ] allow for a seperate config file for lichtfeld studio to be uploaded and then used by the pod instead of one included in the tar file
 - [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there (as option)
 
 - [x] ftp upload show progress in ui
 - [ ] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets
-
-- [ ] i want to be able to create multiple jobs with the same dataset with diffferent config files. this should also be compatible with uploading. give the option to select a different jobs upload as dataset, and wait for it to finish before starting
 
 - [ ] make settings override optional in ui, so that only a config file gets used
 
@@ -46,4 +48,3 @@ todo:
 
 bugs
 - after a job is done it switches to "completed presumably"
-- if a dataset is already a tar no need to pack it

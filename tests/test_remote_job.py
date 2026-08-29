@@ -73,6 +73,23 @@ class RemoteJobScriptTests(unittest.TestCase):
         self.assertIn("ftp://example.test:21/data.tar", text)
         self.assertNotIn("exit 1", text.split("curl_get()")[1].split("if ! done_stage")[0])
 
+    def test_results_upload_into_staging_dir_then_rename(self) -> None:
+        text = render_job_script(_cfg(), 1, 1, pod_id="podabc")
+        self.assertIn("lichtfeld-results/t.upload/", text)
+        self.assertIn("-RNFR lichtfeld-results/t.upload", text)
+        self.assertIn("-RNTO lichtfeld-results/t", text)
+        self.assertIn("renaming $RESULT_STAGING -> $RESULT_DIR", text)
+
+    def test_sftp_results_rename_uses_quote(self) -> None:
+        from dataclasses import replace
+
+        cfg = _cfg()
+        cfg = replace(cfg, storage=replace(cfg.storage, protocol="sftp"))
+        text = render_job_script(cfg, 1, 1, pod_id="podabc")
+        self.assertIn("-rename", text)
+        self.assertIn("lichtfeld-results/t.upload", text)
+        self.assertNotIn("RNFR", text)
+
     def test_client_does_not_terminate_on_success(self) -> None:
         import inspect
         from lichtfeld_runpod import orchestrate

@@ -16,6 +16,15 @@ from .log import log
 
 
 ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar", ".zip")
+UPLOAD_SUFFIX = ".upload"
+
+
+def staging_remote_path(remote_path: str) -> str:
+    """Path used while an FTP transfer is in progress."""
+    path = remote_path.rstrip("/")
+    if path.endswith(UPLOAD_SUFFIX):
+        return path
+    return path + UPLOAD_SUFFIX
 
 
 def uploaded_dataset_path(src: Path, job_id: str) -> str:
@@ -77,6 +86,41 @@ def ensure_remote_dir(cfg: StorageConfig, remote_dir: str) -> None:
             ftp.quit()
         except Exception:
             pass
+
+
+def remote_rename(cfg: StorageConfig, src: str, dest: str, netrc: Path | None = None) -> None:
+    """Rename a file or directory on the storage server (after a staged .upload)."""
+    src = src.strip("/")
+    dest = dest.strip("/")
+    log("ftp", f"REN {src} -> {dest}")
+    if cfg.protocol == "ftp":
+        ftp = ftp_connect(cfg)
+        try:
+            try:
+                ftp.delete(dest)
+            except error_perm:
+                pass
+            ftp.rename(src, dest)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+        return
+    if netrc is None:
+        raise ValueError("netrc is required to rename over sftp")
+    src_q = src.replace('"', "")
+    dest_q = dest.replace('"', "")
+    cmd = [
+        which_tool("curl"),
+        "--fail",
+        "--netrc-file",
+        str(netrc),
+        "-Q",
+        f'-rename "{src_q}" "{dest_q}"',
+        curl_url(cfg, ""),
+    ]
+    subprocess.run(cmd, check=True)
 
 
 def curl_url(cfg: StorageConfig, remote_path: str) -> str:
@@ -251,10 +295,12 @@ def curl_put(
     *,
     on_progress: Callable[[CurlProgress], None] | None = None,
 ) -> None:
-    parent = "/".join(remote_path.strip("/").split("/")[:-1])
+    final = remote_path.rstrip("/")
+    staging = staging_remote_path(final)
+    parent = "/".join(staging.split("/")[:-1])
     if parent:
         ensure_remote_dir(cfg, parent)
-    url = curl_url(cfg, remote_path)
+    url = curl_url(cfg, staging)
     extra = ["--ftp-pasv"] if cfg.protocol == "ftp" else []
     cmd = [
         which_tool("curl"),
@@ -273,12 +319,13 @@ def curl_put(
         str(local),
         url,
     ]
-    log("ftp", f"PUT {local} -> {remote_path}")
+    log("ftp", f"PUT {local} -> {staging}")
     if on_progress is None:
         subprocess.run(cmd, check=True)
-        return
-    expected = local.stat().st_size if local.is_file() else 0
-    _run_curl_with_progress([cmd[0], "--progress-meter", *cmd[1:]], expected, on_progress)
+    else:
+        expected = local.stat().st_size if local.is_file() else 0
+        _run_curl_with_progress([cmd[0], "--progress-meter", *cmd[1:]], expected, on_progress)
+    remote_rename(cfg, staging, final, netrc)
 
 
 def _split_progress_chunks(buf: bytes) -> tuple[list[bytes], bytes]:
@@ -433,9 +480,11 @@ def _walk(
     for entry in _list_entries(ftp, prefix):
         name = str(entry["name"])
         rel = f"{prefix}/{name}" if prefix else name
+        lower = name.lower()
+        if lower.endswith(UPLOAD_SUFFIX):
+            continue
         if entry["is_dir"]:
             _walk(ftp, rel, suffixes, max_depth, depth + 1, found)
             continue
-        lower = name.lower()
         if any(lower.endswith(s) for s in suffixes):
             found.append(rel)

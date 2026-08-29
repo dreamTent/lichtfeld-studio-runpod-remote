@@ -9,6 +9,7 @@ from lichtfeld_runpod.storage import (
     format_transfer_progress,
     parse_curl_progress_line,
     parse_curl_size,
+    staging_remote_path,
     tar_directory,
     uploaded_dataset_path,
     write_netrc,
@@ -83,6 +84,56 @@ class UploadedDatasetPathTests(unittest.TestCase):
             uploaded_dataset_path(Path("scene.tar.gz"), "id1"),
             "lichtfeld-datasets/scene-id1.tar.gz",
         )
+
+
+class StagingRemotePathTests(unittest.TestCase):
+    def test_appends_upload_suffix(self) -> None:
+        self.assertEqual(
+            staging_remote_path("lichtfeld-datasets/scene.tar"),
+            "lichtfeld-datasets/scene.tar.upload",
+        )
+        self.assertEqual(
+            staging_remote_path("lichtfeld-results/job-name/"),
+            "lichtfeld-results/job-name.upload",
+        )
+        self.assertEqual(staging_remote_path("already.upload"), "already.upload")
+
+    def test_curl_put_uploads_staging_then_renames(self) -> None:
+        from unittest.mock import patch
+
+        from lichtfeld_runpod.storage import curl_put
+
+        cfg = StorageConfig(
+            host="example.test",
+            user="u",
+            password="p",
+            protocol="ftp",
+            ftp_port=21,
+            sftp_port=22,
+            dataset_archive="d.tar",
+            build_archive="b.tar.gz",
+            result_dir="r",
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            local = Path(raw) / "data.tar"
+            local.write_bytes(b"abc")
+            netrc = Path(raw) / "netrc"
+            netrc.write_text("x", encoding="utf-8")
+            with (
+                patch("lichtfeld_runpod.storage.ensure_remote_dir"),
+                patch("lichtfeld_runpod.storage.which_tool", return_value="curl"),
+                patch("lichtfeld_runpod.storage.subprocess.run") as run,
+                patch("lichtfeld_runpod.storage.remote_rename") as rename,
+            ):
+                curl_put(cfg, local, "lichtfeld-datasets/data.tar", netrc)
+            cmd = run.call_args[0][0]
+            self.assertIn("ftp://example.test:21/lichtfeld-datasets/data.tar.upload", cmd)
+            rename.assert_called_once_with(
+                cfg,
+                "lichtfeld-datasets/data.tar.upload",
+                "lichtfeld-datasets/data.tar",
+                netrc,
+            )
 
 
 class CurlProgressTests(unittest.TestCase):
