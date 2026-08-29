@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tarfile
+import time
+from collections.abc import Callable
 from ftplib import FTP, error_perm
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from .config import StorageConfig
@@ -160,7 +164,93 @@ def list_remote_files(
     return found
 
 
-def curl_put(cfg: StorageConfig, local: Path, remote_path: str, netrc: Path) -> None:
+class CurlProgress(NamedTuple):
+    uploaded: int
+    total: int
+    speed: str = ""
+    eta: str = ""
+
+
+_CURL_SIZE_RE = re.compile(r"^([\d.]+)([kMGTP])?$", re.I)
+_CURL_METER_RE = re.compile(
+    r"^\s*(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*$"
+)
+_CURL_BAR_RE = re.compile(r"([\d.]+)\s*%\s*$")
+_SIZE_MULT = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4, "p": 1024**5}
+
+
+def parse_curl_size(token: str) -> int | None:
+    raw = token.strip().replace(",", "")
+    if raw in {"0", "--"}:
+        return 0
+    m = _CURL_SIZE_RE.fullmatch(raw)
+    if not m:
+        return None
+    n = float(m.group(1))
+    mult = _SIZE_MULT.get((m.group(2) or "").lower())
+    if mult is None:
+        return None
+    return int(n * mult)
+
+
+def parse_curl_progress_line(line: str, expected: int | None = None) -> CurlProgress | None:
+    text = line.strip()
+    if not text or text.startswith("%") or "Total" in text or "Dload" in text:
+        return None
+    meter = _CURL_METER_RE.match(text)
+    if meter:
+        xfer_pct = int(meter.group(5))
+        uploaded = parse_curl_size(meter.group(6))
+        total = expected if expected and expected > 0 else parse_curl_size(meter.group(2))
+        if uploaded is None and total:
+            uploaded = int(round(total * xfer_pct / 100.0))
+        if uploaded is None:
+            uploaded = 0
+        if not total:
+            total = expected or 0
+        if total and uploaded > total:
+            uploaded = total
+        speed = meter.group(12)
+        eta = meter.group(11)
+        return CurlProgress(uploaded=uploaded, total=total, speed=speed, eta=eta)
+    bar = _CURL_BAR_RE.search(text)
+    if bar and expected and expected > 0:
+        pct = float(bar.group(1))
+        uploaded = int(round(expected * min(pct, 100.0) / 100.0))
+        return CurlProgress(uploaded=uploaded, total=expected)
+    return None
+
+
+def format_transfer_progress(
+    label: str,
+    uploaded: int,
+    total: int,
+    *,
+    speed: str = "",
+    eta: str = "",
+) -> str:
+    if total > 0:
+        text = f"{label} {uploaded / total * 100:.1f}%  ({uploaded:,}/{total:,} bytes)"
+    else:
+        text = f"{label} {uploaded:,} bytes"
+    extra: list[str] = []
+    if speed and speed not in {"0", "--"}:
+        extra.append(speed if speed.endswith("/s") else f"{speed}/s")
+    if eta and eta not in {"", "--:--:--", "--:--"}:
+        extra.append(f"remaining={eta}")
+    if extra:
+        text += "  " + "  ".join(extra)
+    return text
+
+
+def curl_put(
+    cfg: StorageConfig,
+    local: Path,
+    remote_path: str,
+    netrc: Path,
+    *,
+    on_progress: Callable[[CurlProgress], None] | None = None,
+) -> None:
     parent = "/".join(remote_path.strip("/").split("/")[:-1])
     if parent:
         ensure_remote_dir(cfg, parent)
@@ -184,7 +274,73 @@ def curl_put(cfg: StorageConfig, local: Path, remote_path: str, netrc: Path) -> 
         url,
     ]
     log("ftp", f"PUT {local} -> {remote_path}")
-    subprocess.run(cmd, check=True)
+    if on_progress is None:
+        subprocess.run(cmd, check=True)
+        return
+    expected = local.stat().st_size if local.is_file() else 0
+    _run_curl_with_progress([cmd[0], "--progress-meter", *cmd[1:]], expected, on_progress)
+
+
+def _split_progress_chunks(buf: bytes) -> tuple[list[bytes], bytes]:
+    parts = re.split(rb"[\r\n]+", buf)
+    if buf.endswith((b"\r", b"\n")):
+        return [p for p in parts if p], b""
+    return [p for p in parts[:-1] if p], parts[-1] if parts else b""
+
+
+def _run_curl_with_progress(
+    cmd: list[str],
+    expected: int,
+    on_progress: Callable[[CurlProgress], None],
+) -> None:
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    stderr = proc.stderr
+    assert stderr is not None
+    buf = b""
+    last_emit = 0.0
+    last_msg = ""
+    err_tail = b""
+    try:
+        while True:
+            chunk = stderr.read(512)
+            if not chunk:
+                break
+            err_tail = (err_tail + chunk)[-4000:]
+            buf += chunk
+            lines, buf = _split_progress_chunks(buf)
+            for raw in lines:
+                parsed = parse_curl_progress_line(raw.decode("utf-8", "replace"), expected)
+                if parsed is None:
+                    continue
+                now = time.monotonic()
+                msg = format_transfer_progress(
+                    "upload dataset",
+                    parsed.uploaded,
+                    parsed.total or expected,
+                    speed=parsed.speed,
+                    eta=parsed.eta,
+                )
+                if msg == last_msg or now - last_emit < 0.5:
+                    continue
+                last_emit = now
+                last_msg = msg
+                on_progress(parsed)
+        if buf:
+            parsed = parse_curl_progress_line(buf.decode("utf-8", "replace"), expected)
+            if parsed is not None:
+                on_progress(parsed)
+    finally:
+        rc = proc.wait()
+        stderr.close()
+    if rc != 0:
+        extra = err_tail.decode("utf-8", "replace").replace("\r", "\n").strip()[-800:]
+        raise subprocess.CalledProcessError(rc, cmd, stderr=extra or None)
+    if expected > 0:
+        on_progress(CurlProgress(uploaded=expected, total=expected))
 
 
 def curl_get_file(cfg: StorageConfig, remote_path: str, local: Path, netrc: Path) -> None:

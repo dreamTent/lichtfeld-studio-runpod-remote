@@ -5,7 +5,14 @@ from pathlib import Path
 
 from lichtfeld_runpod.config import StorageConfig
 from lichtfeld_runpod.sshutil import ssh_config_text
-from lichtfeld_runpod.storage import tar_directory, uploaded_dataset_path, write_netrc
+from lichtfeld_runpod.storage import (
+    format_transfer_progress,
+    parse_curl_progress_line,
+    parse_curl_size,
+    tar_directory,
+    uploaded_dataset_path,
+    write_netrc,
+)
 
 
 class SshConfigTests(unittest.TestCase):
@@ -76,6 +83,41 @@ class UploadedDatasetPathTests(unittest.TestCase):
             uploaded_dataset_path(Path("scene.tar.gz"), "id1"),
             "lichtfeld-datasets/scene-id1.tar.gz",
         )
+
+
+class CurlProgressTests(unittest.TestCase):
+    def test_parse_put_meter_line(self) -> None:
+        line = " 45  887M    0     0   45  400M      0  6458k  0:02:20  0:01:03  0:01:17 6832k"
+        expected = 930_264_494
+        prog = parse_curl_progress_line(line, expected)
+        self.assertIsNotNone(prog)
+        assert prog is not None
+        self.assertEqual(prog.uploaded, 400 * 1024 * 1024)
+        self.assertEqual(prog.total, expected)
+        self.assertEqual(prog.speed, "6832k")
+        self.assertEqual(prog.eta, "0:01:17")
+
+    def test_parse_ignores_header(self) -> None:
+        self.assertIsNone(parse_curl_progress_line("  % Total    % Received % Xferd  Average Speed"))
+        self.assertIsNone(parse_curl_progress_line("                                 Dload  Upload   Total   Spent    Left  Speed"))
+
+    def test_parse_progress_bar(self) -> None:
+        prog = parse_curl_progress_line("######## 12.5%", expected=1000)
+        self.assertIsNotNone(prog)
+        assert prog is not None
+        self.assertEqual(prog.uploaded, 125)
+        self.assertEqual(prog.total, 1000)
+
+    def test_parse_curl_size(self) -> None:
+        self.assertEqual(parse_curl_size("400M"), 400 * 1024 * 1024)
+        self.assertEqual(parse_curl_size("13.7G"), int(13.7 * 1024**3))
+        self.assertEqual(parse_curl_size("6321k"), 6321 * 1024)
+
+    def test_format_matches_download_style(self) -> None:
+        text = format_transfer_progress("upload dataset", 125, 1000, speed="6832k", eta="0:01:17")
+        self.assertEqual(text, "upload dataset 12.5%  (125/1,000 bytes)  6832k/s  remaining=0:01:17")
+        done = format_transfer_progress("upload dataset", 1000, 1000, speed="5090k", eta="--:--:--")
+        self.assertEqual(done, "upload dataset 100.0%  (1,000/1,000 bytes)  5090k/s")
 
 
 class NetrcTests(unittest.TestCase):

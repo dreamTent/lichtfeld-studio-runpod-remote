@@ -13,8 +13,10 @@ from .runpod import RunpodClient, RunpodError, pod_is_running, ssh_endpoint
 from .sshutil import Ssh, SshError, ensure_ed25519, ftp_check_due, write_ssh_config
 from .status import HEARTBEAT_STALE_SECONDS, heartbeat_ok, job_indicator, pod_indicator
 from .storage import (
+    CurlProgress,
     curl_put,
     download_result_dir,
+    format_transfer_progress,
     list_remote_files,
     remote_size,
     results_look_complete,
@@ -511,13 +513,27 @@ class JobManager:
         tar_path = run_dir / "dataset.tar"
         tar_directory(src, tar_path)
         remote = uploaded_dataset_path(src, job.id)
+        total = tar_path.stat().st_size
         self._update(
             job,
-            message=f"uploading {tar_path.stat().st_size:,} bytes",
+            message=format_transfer_progress("upload dataset", 0, total),
             dataset_archive=remote,
-            dataset_bytes=tar_path.stat().st_size,
+            dataset_bytes=total,
+            stage="uploading_dataset",
         )
-        curl_put(cfg.storage, tar_path, remote, netrc)
+
+        def on_progress(prog: CurlProgress) -> None:
+            msg = format_transfer_progress(
+                "upload dataset",
+                prog.uploaded,
+                prog.total or total,
+                speed=prog.speed,
+                eta=prog.eta,
+            )
+            self._update(job, message=msg, log_tail=msg)
+            log("ftp", msg)
+
+        curl_put(cfg.storage, tar_path, remote, netrc, on_progress=on_progress)
         self._update(job, dataset_archive=remote, message="dataset uploaded")
 
     def _create_pod(self, job: Job, cfg: AppConfig) -> None:

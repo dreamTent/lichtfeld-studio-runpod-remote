@@ -30,16 +30,19 @@ todo:
 - make enter not create job
 - add field for entering runpod image template name (or modifying it from default)
 - [ ] ftp uploads should end with .upload and then be renamed after the upload completes
+- [ ] when the remote server uploads to the ftp server it appends .upload to the folder and then renames the folder after all containing files are uploaded to the ftp server
 
 - [ ] allow for a seperate config file to be uploaded
 - [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there (as option)
 
-- [ ] ftp upload show progress in ui
+- [x] ftp upload show progress in ui
 - [ ] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets
 
 - [ ] i want to be able to create multiple jobs with the same dataset with diffferent config files. this should also be compatible with uploading. give the option to select a different jobs upload as dataset, and wait for it to finish before starting
 
 - [ ] make settings override optional in ui, so that only a config file gets used
+
+- [ ] better file selection for local upload
 
 bugs
 - after a job is done it switches to "completed presumably"
