@@ -44,10 +44,21 @@ function fillDefaultJobName(force = false) {
   if (force || !input.value.trim()) input.value = defaultJobName();
 }
 
+const ORB_TITLE = {
+  white: "foreign pod",
+  green_blink: "created",
+  blue_blink: "waiting",
+  green: "running",
+  teal: "finished",
+  yellow: "connection lost",
+  red_blink: "error",
+  red: "disconnected",
+};
+
 function orb(color) {
   const span = document.createElement("span");
   span.className = `orb ${color || "white"}`;
-  span.title = color || "white";
+  span.title = ORB_TITLE[color] || color || "white";
   return span;
 }
 

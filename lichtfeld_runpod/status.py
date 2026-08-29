@@ -7,6 +7,7 @@ HEARTBEAT_STALE_SECONDS = 30.0
 # Pod circles
 WHITE = "white"
 GREEN = "green"
+TEAL = "teal"
 YELLOW = "yellow"
 RED_BLINK = "red_blink"
 RED = "red"
@@ -32,13 +33,13 @@ def pod_indicator(
     has_error: bool,
     job_complete: bool,
 ) -> str:
-    """Return a pod circle token: white, green, yellow, red_blink, red."""
+    """Return a pod circle token: white, green, teal, yellow, red_blink, red."""
     if not controlled:
         return WHITE
     if has_error:
         return RED_BLINK
     if job_complete:
-        return GREEN
+        return TEAL
     if not api_running:
         return RED
     if heartbeat_fresh:
@@ -55,7 +56,7 @@ def job_indicator(phase: str, pod_color: str | None = None) -> str:
     if phase == "error":
         return RED_BLINK
     if phase == "complete":
-        return GREEN
+        return TEAL
     if pod_color:
         return pod_color
     return BLUE_BLINK

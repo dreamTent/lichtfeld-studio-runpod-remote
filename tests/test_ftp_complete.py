@@ -1,7 +1,7 @@
 import unittest
 
 from lichtfeld_runpod.jobs import PRESUMED_COMPLETE_MESSAGE
-from lichtfeld_runpod.status import GREEN, job_indicator
+from lichtfeld_runpod.status import TEAL, job_indicator
 from lichtfeld_runpod.storage import result_names_look_complete
 from lichtfeld_runpod.sshutil import ftp_check_due
 
@@ -20,8 +20,8 @@ class ResultCompleteTests(unittest.TestCase):
         self.assertFalse(ftp_check_due(6))
         self.assertTrue(ftp_check_due(10))
 
-    def test_presumed_complete_stays_green(self) -> None:
-        self.assertEqual(job_indicator("complete"), GREEN)
+    def test_presumed_complete_is_teal(self) -> None:
+        self.assertEqual(job_indicator("complete"), TEAL)
         self.assertEqual(PRESUMED_COMPLETE_MESSAGE, "completed (presumably)")
 
 

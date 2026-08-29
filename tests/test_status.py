@@ -6,6 +6,7 @@ from lichtfeld_runpod.status import (
     GREEN_BLINK,
     RED,
     RED_BLINK,
+    TEAL,
     WHITE,
     YELLOW,
     heartbeat_ok,
@@ -75,7 +76,7 @@ class PodIndicatorTests(unittest.TestCase):
             RED,
         )
 
-    def test_complete_stays_green_even_if_pod_gone(self) -> None:
+    def test_complete_is_teal_even_if_pod_gone(self) -> None:
         self.assertEqual(
             pod_indicator(
                 controlled=True,
@@ -84,7 +85,7 @@ class PodIndicatorTests(unittest.TestCase):
                 has_error=False,
                 job_complete=True,
             ),
-            GREEN,
+            TEAL,
         )
 
 
@@ -102,6 +103,10 @@ class JobIndicatorTests(unittest.TestCase):
 
     def test_error_blinks_red(self) -> None:
         self.assertEqual(job_indicator("error", GREEN), RED_BLINK)
+
+    def test_complete_is_teal(self) -> None:
+        self.assertEqual(job_indicator("complete"), TEAL)
+        self.assertEqual(job_indicator("complete", GREEN), TEAL)
 
 
 class HeartbeatTests(unittest.TestCase):
