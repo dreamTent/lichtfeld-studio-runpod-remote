@@ -9,6 +9,8 @@ const state = {
   reloading: null,
   reloadFlash: null,
   discarding: null,
+  aborting: null,
+  datasetsDir: "",
 };
 
 function showView(name) {
@@ -238,6 +240,7 @@ function renderDetail() {
     kv.push(["Dataset", job.dataset_archive || job.dataset_local || "—"]);
     kv.push(["Results", job.result_dir || "—"]);
     kv.push(["Download", job.auto_download ? "local + FTP" : "FTP only"]);
+    if (job.local_results) kv.push(["Local folder", job.local_results]);
   } else {
     kv.push(["Pod", pod.id]);
     kv.push(["Status", `${pod.status || ""} · ${pod.color}`]);
@@ -259,6 +262,17 @@ function renderDetail() {
         discarding ? "Discarding…" : "Discard pod"
       }</button>`
     : "";
+  const aborting = job && state.aborting === job.id;
+  const abortBtn =
+    job && job.phase === "uploading_dataset"
+      ? `<button type="button" data-act="abort-upload" class="danger"${aborting ? " disabled" : ""}>${
+          aborting ? "Aborting…" : "Abort upload"
+        }</button>`
+      : "";
+  const openResultsBtn =
+    job && job.local_results_ready
+      ? `<button type="button" data-act="open-results">Open result folder</button>`
+      : "";
   const archiveBtn = job
     ? job.archived
       ? `<button type="button" data-act="unarchive">Unarchive</button>`
@@ -266,15 +280,21 @@ function renderDetail() {
     : "";
   const deleteBtn = job ? `<button type="button" data-act="delete" class="danger">Remove from list</button>` : "";
   const note = job
-    ? podId
+    ? job.local_results_ready
+      ? "Open result folder shows the downloaded output on this machine. Archive or remove hides this listing only. FTP results and local downloads stay."
+      : podId
       ? "Reload probes SSH and checks FTP for finished results. Discard pod terminates the GPU on RunPod. Archive or remove hides this listing only. FTP results and local downloads stay."
-      : "Reload probes SSH and checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay."
+      : job.phase === "uploading_dataset"
+        ? "Abort upload stops the FTP transfer and cancels this job. Archive or remove hides this listing only."
+        : "Reload probes SSH and checks FTP for finished results. Archive or remove hides this listing only. FTP results and local downloads stay."
     : "This pod was not started by this app. Discard pod terminates it on RunPod.";
   const actions =
     job || podId
       ? `<div class="detail-actions">
         <p class="note">${note}</p>
+        ${openResultsBtn}
         ${reloadBtn}
+        ${abortBtn}
         ${discardBtn}
         ${archiveBtn}
         ${deleteBtn}
@@ -293,6 +313,8 @@ function renderDetail() {
   box.querySelector("[data-act=reload]")?.addEventListener("click", () => reloadJob(job.id));
   box.querySelector("[data-act=delete]")?.addEventListener("click", () => deleteJobListing(job.id));
   box.querySelector("[data-act=discard]")?.addEventListener("click", () => discardPod(podId, Boolean(job)));
+  box.querySelector("[data-act=abort-upload]")?.addEventListener("click", () => abortUpload(job.id));
+  box.querySelector("[data-act=open-results]")?.addEventListener("click", () => openResultFolder(job.id));
 }
 
 async function reloadJob(jobId) {
@@ -313,6 +335,14 @@ async function reloadJob(jobId) {
   } finally {
     state.reloading = null;
     renderLists();
+  }
+}
+
+async function openResultFolder(jobId) {
+  try {
+    await api(`/api/jobs/${jobId}/open-results`, { method: "POST" });
+  } catch (err) {
+    alert(err.message);
   }
 }
 
@@ -337,6 +367,22 @@ async function deleteJobListing(jobId) {
     applySnapshot(await api("/api/state"));
   } catch (err) {
     alert(err.message);
+  }
+}
+
+async function abortUpload(jobId) {
+  const ok = window.confirm("Abort this FTP upload and cancel the job?");
+  if (!ok) return;
+  state.aborting = jobId;
+  renderLists();
+  try {
+    await api(`/api/jobs/${jobId}/abort-upload`, { method: "POST" });
+    applySnapshot(await api("/api/state"));
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    state.aborting = null;
+    renderLists();
   }
 }
 
@@ -416,22 +462,27 @@ $("#settings-form").addEventListener("submit", async (e) => {
 
 async function loadJobOptions() {
   try {
-    const [gpus, builds, datasets] = await Promise.all([
+    const [gpus, builds, datasets, defaults] = await Promise.all([
       api("/api/gpus"),
       api("/api/ftp/builds"),
       api("/api/ftp/datasets"),
+      api("/api/defaults"),
     ]);
+    state.datasetsDir = defaults.datasets_dir || "";
+    const imageInput = $("#job-image");
+    if (imageInput && !imageInput.value.trim()) imageInput.value = defaults.image || "";
     fillSelect($("#gpu-select"), gpus.gpus.map((g) => ({
       value: g.id,
       label: `${g.name}${g.memory_gb ? ` (${g.memory_gb} GB)` : ""}${g.availability ? ` · ${g.availability}` : ""}`,
     })), $("#gpu-select").value || "NVIDIA L40S");
     fillSelect($("#build-select"), builds.files.map((f) => ({ value: f, label: f })));
     fillSelect($("#dataset-select"), datasets.files.map((f) => ({ value: f, label: f })));
+    browseFs(state.datasetsDir || "");
   } catch (err) {
     $("#job-error").textContent = err.message;
     $("#job-error").hidden = false;
+    browseFs(state.datasetsDir || "");
   }
-  browseFs("");
 }
 
 function fillSelect(sel, items, preferred) {
@@ -458,61 +509,159 @@ $$("[name=dataset_source]").forEach((r) => {
   });
 });
 
+const ARCHIVE_RE = /\.(tar\.gz|tgz|tar|zip)$/i;
+
+function isArchivePath(p) {
+  return ARCHIVE_RE.test(String(p || ""));
+}
+
+function syncUploadAsIs() {
+  const wrap = $("#upload-as-is-wrap");
+  const box = $("#upload-as-is");
+  if (!wrap || !box) return;
+  const show = isArchivePath($("#dataset-local")?.value.trim());
+  wrap.hidden = !show;
+  if (show) box.checked = true;
+}
+
+async function pickPath(kind, purpose) {
+  try {
+    const data = await api("/api/fs/pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind,
+        purpose: purpose || "",
+        start: kind === "dir"
+          ? ($("#dataset-local")?.value.trim() || state.datasetsDir)
+          : (state.datasetsDir || ""),
+      }),
+    });
+    if (data.cancelled) return null;
+    return data.path || null;
+  } catch (err) {
+    $("#job-error").textContent = `${err.message} Use the folder list below.`;
+    $("#job-error").hidden = false;
+    return null;
+  }
+}
+
+$("#pick-folder")?.addEventListener("click", async () => {
+  const path = await pickPath("dir");
+  if (!path) return;
+  $("#dataset-local").value = path;
+  syncUploadAsIs();
+  browseFs(path);
+});
+
+$("#pick-archive")?.addEventListener("click", async () => {
+  const path = await pickPath("file", "archive");
+  if (!path) return;
+  $("#dataset-local").value = path;
+  syncUploadAsIs();
+});
+
+$("#pick-config")?.addEventListener("click", async () => {
+  const path = await pickPath("file", "json");
+  if (!path) return;
+  $("#config-local").value = path;
+});
+
+$("#dataset-local")?.addEventListener("input", syncUploadAsIs);
+
+$("#override-lichtfeld")?.addEventListener("change", () => {
+  const on = $("#override-lichtfeld").checked;
+  $("#override-fields").hidden = !on;
+});
+
 async function browseFs(path) {
   const box = $("#fs-browser");
+  if (!box) return;
   try {
     const data = await api(`/api/fs?path=${encodeURIComponent(path)}`);
     box.innerHTML = "";
-    const up = document.createElement("button");
-    up.type = "button";
-    up.textContent = `↑ ${data.parent}`;
-    up.addEventListener("click", () => browseFs(data.parent));
-    box.append(up);
+    const use = document.createElement("button");
+    use.type = "button";
+    use.textContent = "Use this folder";
+    use.addEventListener("click", () => {
+      $("#dataset-local").value = data.path;
+      syncUploadAsIs();
+      if (data.is_scene) applySceneHint(data);
+    });
+    box.append(use);
+    if (data.parent && data.parent !== data.path) {
+      const up = document.createElement("button");
+      up.type = "button";
+      up.textContent = `↑ ${data.parent}`;
+      up.addEventListener("click", () => browseFs(data.parent));
+      box.append(up);
+    }
     for (const ent of data.entries) {
-      if (!ent.is_dir) continue;
+      if (!ent.is_dir && !ent.is_archive && !ent.is_json) continue;
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = `▸ ${ent.name}`;
-      b.addEventListener("click", () => {
-        $("#dataset-local").value = ent.path;
-        browseFs(ent.path);
-      });
+      if (ent.is_dir) {
+        b.textContent = `▸ ${ent.name}`;
+        b.addEventListener("click", () => {
+          $("#dataset-local").value = ent.path;
+          syncUploadAsIs();
+          browseFs(ent.path);
+        });
+      } else if (ent.is_json) {
+        b.className = "file";
+        b.textContent = `JSON ${ent.name}`;
+        b.addEventListener("click", () => {
+          $("#config-local").value = ent.path;
+        });
+      } else {
+        b.className = "file";
+        b.textContent = `▣ ${ent.name}`;
+        b.addEventListener("click", () => {
+          $("#dataset-local").value = ent.path;
+          syncUploadAsIs();
+        });
+      }
       box.append(b);
     }
-    if (data.is_scene) {
-      $("#dataset-local").value = data.scene_root || data.path;
-      if (data.configs?.length) {
-        $("#config-rel").value = data.configs[0];
-        $("#config-note").textContent = `Detected config: ${data.configs.join(", ")}`;
-      } else {
-        $("#config-note").textContent = "Scene found, but no JSON config. Pick one if you have it.";
-      }
-    }
+    if (data.is_scene) applySceneHint(data);
   } catch (err) {
     box.textContent = err.message;
   }
 }
 
-$("#job-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const form = e.currentTarget;
+function applySceneHint(data) {
+  $("#dataset-local").value = data.scene_root || data.path;
+  if (data.configs?.length) {
+    $("#config-rel").value = data.configs[0];
+    $("#config-note").textContent = `Detected config: ${data.configs.join(", ")}`;
+  } else {
+    $("#config-note").textContent = "Scene found, but no JSON config. Pick one if you have it.";
+  }
+}
+
+async function submitJob() {
+  const form = $("#job-form");
   $("#job-error").hidden = true;
   const source = form.dataset_source.value;
+  const override = form.override_lichtfeld.checked;
   const body = {
     name: form.name.value,
     gpu: form.gpu.value,
     cloud: form.cloud.value,
+    image: form.image.value,
     build_archive: form.build_archive.value,
     dataset_source: source,
     dataset_archive: source === "ftp" ? form.dataset_archive.value : "",
     dataset_local: source === "local" ? form.dataset_local.value : "",
+    upload_as_is: source === "local" && form.upload_as_is.checked,
     result_dir: form.result_dir.value,
     config: form.config.value,
+    config_local: form.config_local.value,
     auto_download: form.auto_download.checked,
     terminate_when_done: form.terminate_when_done.checked,
-    max_cap: form.max_cap.value ? Number(form.max_cap.value) : null,
-    enable_sparsity: form.enable_sparsity.checked,
-    gut: form.gut.checked,
+    max_cap: override && form.max_cap.value ? Number(form.max_cap.value) : null,
+    enable_sparsity: override ? form.enable_sparsity.checked : null,
+    gut: override ? form.gut.checked : null,
   };
   try {
     const job = await api("/api/jobs", {
@@ -526,7 +675,19 @@ $("#job-form").addEventListener("submit", async (e) => {
     $("#job-error").textContent = err.message;
     $("#job-error").hidden = false;
   }
+}
+
+$("#job-form").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.target.tagName === "TEXTAREA") return;
+  if (e.target.id === "job-start") return;
+  e.preventDefault();
 });
+
+$("#job-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+});
+
+$("#job-start")?.addEventListener("click", () => submitJob());
 
 function applySnapshot(data) {
   state.data = data;

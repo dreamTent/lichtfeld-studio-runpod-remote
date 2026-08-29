@@ -194,7 +194,10 @@ PY
 DATA_PATH="$(find_data)"
 log "Dataset path: $DATA_PATH"
 CONFIG_ARG=()
-if [[ -n "$CONFIG_REL" ]]; then
+if [[ -f /workspace/lichtfeld-config.json ]]; then
+  CONFIG_ARG=(--config /workspace/lichtfeld-config.json)
+  log "Using uploaded config /workspace/lichtfeld-config.json"
+elif [[ -n "$CONFIG_REL" ]]; then
   CFG="$DATA_PATH/$CONFIG_REL"
   if [[ ! -f "$CFG" ]]; then
     echo "LichtFeld config not found: $CFG" >&2

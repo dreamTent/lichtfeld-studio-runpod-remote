@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import ConfigError, load_config
 from .host import restrict_secret_file
+from .localfs import ensure_datasets_dir
 from .log import log
 from .orchestrate import run_job
 
@@ -84,6 +85,8 @@ def _init_files(here: Path, examples: Path) -> None:
         if dest_name == ".env":
             restrict_secret_file(dest)
         log("init", f"wrote {dest}")
+    datasets = ensure_datasets_dir(here)
+    log("init", f"local datasets folder {datasets}")
     log("init", "edit config.yaml and .env, then: python3 -m lichtfeld_runpod --config config.yaml")
     log("init", "or start the dashboard: python3 -m lichtfeld_runpod --ui")
 

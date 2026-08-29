@@ -6,7 +6,10 @@ from pathlib import Path
 from lichtfeld_runpod.config import StorageConfig
 from lichtfeld_runpod.sshutil import ssh_config_text
 from lichtfeld_runpod.storage import (
+    UploadAborted,
+    curl_put,
     format_transfer_progress,
+    is_archive_path,
     parse_curl_progress_line,
     parse_curl_size,
     staging_remote_path,
@@ -135,6 +138,42 @@ class StagingRemotePathTests(unittest.TestCase):
                 netrc,
             )
 
+    def test_curl_put_aborts_before_transfer(self) -> None:
+        from unittest.mock import patch
+
+        cfg = StorageConfig(
+            host="example.test",
+            user="u",
+            password="p",
+            protocol="ftp",
+            ftp_port=21,
+            sftp_port=22,
+            dataset_archive="d.tar",
+            build_archive="b.tar.gz",
+            result_dir="r",
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            local = Path(raw) / "data.tar"
+            local.write_bytes(b"abc")
+            netrc = Path(raw) / "netrc"
+            netrc.write_text("x", encoding="utf-8")
+            with (
+                patch("lichtfeld_runpod.storage.ensure_remote_dir"),
+                patch("lichtfeld_runpod.storage.subprocess.run") as run,
+                patch("lichtfeld_runpod.storage.remote_rename") as rename,
+            ):
+                with self.assertRaises(UploadAborted):
+                    curl_put(cfg, local, "lichtfeld-datasets/data.tar", netrc, should_stop=lambda: True)
+            run.assert_not_called()
+            rename.assert_not_called()
+
+    def test_is_archive_path(self) -> None:
+        self.assertTrue(is_archive_path("scene.tar"))
+        self.assertTrue(is_archive_path(Path("scene.tar.gz")))
+        self.assertTrue(is_archive_path("scene.zip"))
+        self.assertFalse(is_archive_path("scene"))
+        self.assertFalse(is_archive_path("notes.json"))
+
 
 class CurlProgressTests(unittest.TestCase):
     def test_parse_put_meter_line(self) -> None:
@@ -208,6 +247,50 @@ class NetrcTests(unittest.TestCase):
             )
             write_netrc(path, cfg)
             self.assertIn(r'password "a\"b\\c"', path.read_text(encoding="utf-8"))
+
+
+class OpenInFileManagerTests(unittest.TestCase):
+    def test_windows_uses_startfile(self) -> None:
+        from unittest.mock import patch
+
+        from lichtfeld_runpod.host import open_in_file_manager
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw)
+            with (
+                patch("lichtfeld_runpod.host.IS_WINDOWS", True),
+                patch("lichtfeld_runpod.host.os.startfile") as startfile,
+            ):
+                open_in_file_manager(path)
+            startfile.assert_called_once()
+            self.assertEqual(Path(startfile.call_args[0][0]), path.resolve())
+
+    def test_linux_uses_xdg_open(self) -> None:
+        from unittest.mock import patch
+
+        from lichtfeld_runpod.host import open_in_file_manager
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw)
+            with (
+                patch("lichtfeld_runpod.host.IS_WINDOWS", False),
+                patch("lichtfeld_runpod.host.sys.platform", "linux"),
+                patch("lichtfeld_runpod.host.subprocess.Popen") as popen,
+            ):
+                open_in_file_manager(path)
+            popen.assert_called_once()
+            args = popen.call_args[0][0]
+            self.assertEqual(args[0], "xdg-open")
+            self.assertEqual(Path(args[1]), path.resolve())
+            self.assertTrue(popen.call_args.kwargs.get("start_new_session"))
+
+    def test_rejects_missing_folder(self) -> None:
+        from lichtfeld_runpod.host import open_in_file_manager
+
+        with tempfile.TemporaryDirectory() as raw:
+            missing = Path(raw) / "gone"
+            with self.assertRaises(FileNotFoundError):
+                open_in_file_manager(missing)
 
 
 if __name__ == "__main__":

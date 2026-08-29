@@ -152,6 +152,9 @@ def inject_and_start(
     ssh.run("mkdir -p /workspace/logs /workspace/state /root")
     ssh.put(netrc, "/root/.netrc")
     ssh.put(api_file, "/root/.runpod_api")
+    sidecar = run_dir / "lichtfeld-config.json"
+    if sidecar.is_file():
+        ssh.put(sidecar, "/workspace/lichtfeld-config.json")
 
     script_text = render_job_script(cfg, build_bytes, dataset_bytes, pod_id=pod_id)
     local_script = run_dir / "remote_job.sh"

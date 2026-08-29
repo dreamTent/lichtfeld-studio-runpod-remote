@@ -4,6 +4,7 @@ import getpass
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from .log import log
@@ -48,3 +49,15 @@ def restrict_secret_file(path: Path) -> None:
     )
     if r.returncode != 0:
         log("host", f"could not lock down {path}: {(r.stderr or r.stdout or '').strip()}")
+
+
+def open_in_file_manager(path: Path) -> None:
+    """Open a local directory in Explorer / Finder / the desktop file manager."""
+    path = path.expanduser().resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"folder not found: {path}")
+    if IS_WINDOWS:
+        os.startfile(path)  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.Popen([opener, str(path)], start_new_session=True)

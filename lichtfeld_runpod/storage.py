@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import tarfile
+import threading
 import time
 from collections.abc import Callable
 from ftplib import FTP, error_perm
@@ -17,6 +18,15 @@ from .log import log
 
 ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar", ".zip")
 UPLOAD_SUFFIX = ".upload"
+
+
+class UploadAborted(Exception):
+    """Raised when an FTP upload is cancelled by the user."""
+
+
+def is_archive_path(path: Path | str) -> bool:
+    name = Path(path).name.lower()
+    return any(name.endswith(ext) for ext in ARCHIVE_SUFFIXES)
 
 
 def staging_remote_path(remote_path: str) -> str:
@@ -118,6 +128,39 @@ def remote_rename(cfg: StorageConfig, src: str, dest: str, netrc: Path | None = 
         str(netrc),
         "-Q",
         f'-rename "{src_q}" "{dest_q}"',
+        curl_url(cfg, ""),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def remote_delete(cfg: StorageConfig, remote_path: str, netrc: Path | None = None) -> None:
+    """Best-effort delete of a file on the storage server (e.g. leftover .upload)."""
+    path = remote_path.strip("/")
+    if not path:
+        return
+    log("ftp", f"DEL {path}")
+    if cfg.protocol == "ftp":
+        ftp = ftp_connect(cfg)
+        try:
+            ftp.delete(path)
+        except error_perm as e:
+            log("ftp", f"DEL skip {path}: {e}")
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+        return
+    if netrc is None:
+        raise ValueError("netrc is required to delete over sftp")
+    path_q = path.replace('"', "")
+    cmd = [
+        which_tool("curl"),
+        "--fail",
+        "--netrc-file",
+        str(netrc),
+        "-Q",
+        f'rm "{path_q}"',
         curl_url(cfg, ""),
     ]
     subprocess.run(cmd, check=True)
@@ -294,6 +337,7 @@ def curl_put(
     netrc: Path,
     *,
     on_progress: Callable[[CurlProgress], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     final = remote_path.rstrip("/")
     staging = staging_remote_path(final)
@@ -320,11 +364,16 @@ def curl_put(
         url,
     ]
     log("ftp", f"PUT {local} -> {staging}")
-    if on_progress is None:
+    if should_stop is not None and should_stop():
+        raise UploadAborted("upload aborted")
+    expected = local.stat().st_size if local.is_file() else 0
+    if on_progress is None and should_stop is None:
         subprocess.run(cmd, check=True)
     else:
-        expected = local.stat().st_size if local.is_file() else 0
-        _run_curl_with_progress([cmd[0], "--progress-meter", *cmd[1:]], expected, on_progress)
+        progress_cmd = [cmd[0], "--progress-meter", *cmd[1:]] if on_progress else cmd
+        _run_curl_with_progress(progress_cmd, expected, on_progress, should_stop)
+    if should_stop is not None and should_stop():
+        raise UploadAborted("upload aborted")
     remote_rename(cfg, staging, final, netrc)
 
 
@@ -338,7 +387,8 @@ def _split_progress_chunks(buf: bytes) -> tuple[list[bytes], bytes]:
 def _run_curl_with_progress(
     cmd: list[str],
     expected: int,
-    on_progress: Callable[[CurlProgress], None],
+    on_progress: Callable[[CurlProgress], None] | None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     proc = subprocess.Popen(
         cmd,
@@ -347,46 +397,68 @@ def _run_curl_with_progress(
     )
     stderr = proc.stderr
     assert stderr is not None
+    aborted = threading.Event()
+
+    def watch_stop() -> None:
+        while proc.poll() is None:
+            if should_stop is not None and should_stop():
+                aborted.set()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return
+            time.sleep(0.2)
+
+    watcher = threading.Thread(target=watch_stop, daemon=True)
+    watcher.start()
     buf = b""
     last_emit = 0.0
     last_msg = ""
     err_tail = b""
     try:
-        while True:
-            chunk = stderr.read(512)
-            if not chunk:
-                break
-            err_tail = (err_tail + chunk)[-4000:]
-            buf += chunk
-            lines, buf = _split_progress_chunks(buf)
-            for raw in lines:
-                parsed = parse_curl_progress_line(raw.decode("utf-8", "replace"), expected)
-                if parsed is None:
-                    continue
-                now = time.monotonic()
-                msg = format_transfer_progress(
-                    "upload dataset",
-                    parsed.uploaded,
-                    parsed.total or expected,
-                    speed=parsed.speed,
-                    eta=parsed.eta,
-                )
-                if msg == last_msg or now - last_emit < 0.5:
-                    continue
-                last_emit = now
-                last_msg = msg
-                on_progress(parsed)
-        if buf:
-            parsed = parse_curl_progress_line(buf.decode("utf-8", "replace"), expected)
-            if parsed is not None:
-                on_progress(parsed)
+        if on_progress is None:
+            proc.wait()
+        else:
+            while True:
+                chunk = stderr.read(512)
+                if not chunk:
+                    break
+                err_tail = (err_tail + chunk)[-4000:]
+                buf += chunk
+                lines, buf = _split_progress_chunks(buf)
+                for raw in lines:
+                    parsed = parse_curl_progress_line(raw.decode("utf-8", "replace"), expected)
+                    if parsed is None:
+                        continue
+                    now = time.monotonic()
+                    msg = format_transfer_progress(
+                        "upload dataset",
+                        parsed.uploaded,
+                        parsed.total or expected,
+                        speed=parsed.speed,
+                        eta=parsed.eta,
+                    )
+                    if msg == last_msg or now - last_emit < 0.5:
+                        continue
+                    last_emit = now
+                    last_msg = msg
+                    on_progress(parsed)
+            if buf:
+                parsed = parse_curl_progress_line(buf.decode("utf-8", "replace"), expected)
+                if parsed is not None:
+                    on_progress(parsed)
     finally:
         rc = proc.wait()
         stderr.close()
+        watcher.join(timeout=1)
+    if aborted.is_set() or (should_stop is not None and should_stop()):
+        raise UploadAborted("upload aborted")
     if rc != 0:
         extra = err_tail.decode("utf-8", "replace").replace("\r", "\n").strip()[-800:]
         raise subprocess.CalledProcessError(rc, cmd, stderr=extra or None)
-    if expected > 0:
+    if on_progress is not None and expected > 0:
         on_progress(CurlProgress(uploaded=expected, total=expected))
 
 

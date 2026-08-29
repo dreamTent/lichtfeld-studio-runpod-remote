@@ -122,11 +122,17 @@ main { padding: 18px 22px 40px; }
 }
 label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 .inline { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
-input, select, button[type="submit"] {
+input, select, button[type="submit"], #job-start {
   background: #0b0d10; color: var(--ink); border: 1px solid var(--line); padding: 8px 10px; font: inherit;
 }
-button[type="submit"] { background: #1d3a2c; border-color: #2f5a44; color: var(--green); cursor: pointer; }
-button[type="submit"]:hover { background: #254a38; }
+button[type="submit"], #job-start { background: #1d3a2c; border-color: #2f5a44; color: var(--green); cursor: pointer; }
+button[type="submit"]:hover, #job-start:hover { background: #254a38; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.row-actions button {
+  background: #0b0d10; color: var(--ink); border: 1px solid var(--line);
+  padding: 6px 12px; cursor: pointer; border-radius: 6px; font: inherit;
+}
+.row-actions button:hover { border-color: var(--muted); }
 fieldset { border: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .note { color: var(--muted); font-size: 12px; margin: 0; }
 .form-error { color: var(--red); margin: 0; }
@@ -134,6 +140,7 @@ fieldset { border: 1px solid var(--line); padding: 12px; display: flex; flex-dir
 .fs { max-height: 180px; overflow: auto; border: 1px solid var(--line); background: #0b0d10; font-size: 12px; }
 .fs button { display: block; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 0; padding: 6px 8px; cursor: pointer; }
 .fs button:hover { background: #182018; }
+.fs button.file { color: var(--muted); }
 code { color: var(--green); }
 @media (max-width: 800px) {
   .split { grid-template-columns: 1fr; }

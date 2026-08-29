@@ -33,7 +33,7 @@ pip install -e .
 python3 -m lichtfeld_runpod --init
 ```
 
-`--init` writes `config.yaml` and `.env` if they do not already exist.
+`--init` writes `config.yaml` and `.env` if they do not already exist, and creates a local `datasets/` folder in the working directory.
 
 Put secrets in **`.env`** (never commit this file):
 
@@ -84,7 +84,7 @@ tar -czf lichtfeld-0.5.3-l40s-sm89.tar.gz LichtFeld-Studio
 
 Each archive is one COLMAP scene (or a folder that contains one). After extract, the runner looks for a directory with `sparse/` (COLMAP `cameras.bin` or `cameras.txt`) and an image folder named `images/`, `image/`, `imgs/`, or `rgb/`. Nested layouts are fine.
 
-The dashboard lists archives under `lichtfeld-datasets/` plus any archive sitting in the FTP root. A local folder or archive chosen in **New job** is uploaded to `lichtfeld-datasets/<original-name>-<job-id>.tar` (or the original archive suffix).
+The dashboard lists archives under `lichtfeld-datasets/` plus any archive sitting in the FTP root. A local folder or archive chosen in **New job** is uploaded to `lichtfeld-datasets/<original-name>-<job-id>.tar` (or the original archive suffix). On this machine, put scenes in the `datasets/` folder (created at startup) or browse elsewhere.
 
 An optional LichtFeld JSON config lives **inside** the scene (next to `images/` and `sparse/`). The path you enter in the job form is relative to that scene root.
 
@@ -115,12 +115,19 @@ Open **Settings** and save your RunPod API key and storage login. Values are wri
 Open **New job** and choose:
 
 - GPU type and cloud (`SECURE`, `COMMUNITY`, or `AUTO`)
+- RunPod **image** (defaults to `runpod.image` in `config.yaml`; change it per job if you need another template)
 - A LichtFeld **build** from `lichtfeld-builds/` ([layout](#ftpsftp-layout))
-- A **dataset**: an existing archive under `lichtfeld-datasets/`, or a local folder (tarred and uploaded there)
+- A **dataset**: an existing archive under `lichtfeld-datasets/`, or a local folder/archive
+  - Local picks use native **Browse folder…** / **Browse archive…** dialogs (the in-app list is a fallback) and default to the `datasets/` folder next to the app
+  - If you pick an existing `.tar` / `.tar.gz` / `.zip`, you can **upload it as-is** instead of copying it into the job folder first
 - Optional LichtFeld config path (relative to the COLMAP scene root: the folder with `images/` and `sparse/`)
-- Result folder on FTP, max Gaussians, sparsity / GUT
+- Or a **separate local JSON config** uploaded to the pod (used instead of a config inside the dataset archive)
+- Result folder on FTP
+- Optional **Override LichtFeld settings** (max Gaussians, sparsity, GUT). Leave this off to use only the LichtFeld config file and the binary defaults
 - Whether to download results to this machine when done
 - Whether the pod should terminate after the FTP upload (on by default)
+
+While a local dataset is uploading, **Abort upload** on the job detail stops the FTP transfer and cancels that job.
 
 ## What a job does
 

@@ -13,6 +13,7 @@ from .host import restrict_secret_file, write_text_lf
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 EXAMPLE_YAML = Path(__file__).resolve().parent.parent / "config.example.yaml"
+DEFAULT_RUNPOD_IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 
 
 class ConfigError(Exception):
@@ -107,8 +108,8 @@ class SshConfig:
 class LichtfeldConfig:
     config: str
     max_cap: int | None
-    enable_sparsity: bool
-    gut: bool
+    enable_sparsity: bool | None
+    gut: bool | None
     headless: bool
     extra_args: list[str]
     iterations: int | None
@@ -165,7 +166,7 @@ def load_config(config_path: Path, env_path: Path | None = None) -> AppConfig:
             gpu=str(_require(rp, "gpu")),
             gpu_count=gpu_count,
             cloud=str(rp.get("cloud") or "SECURE").upper(),
-            image=str(rp.get("image") or "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"),
+            image=str(rp.get("image") or DEFAULT_RUNPOD_IMAGE),
             container_disk_gb=int(rp.get("container_disk_gb") or 50),
             volume_gb=int(rp.get("volume_gb") or 150),
             volume_mount=str(rp.get("volume_mount") or "/workspace"),
@@ -205,6 +206,19 @@ def load_config(config_path: Path, env_path: Path | None = None) -> AppConfig:
     return cfg
 
 
+def peek_runpod_image(workdir: Path) -> str:
+    """Read runpod.image from YAML without requiring secrets."""
+    cfg_path = workdir / "config.yaml"
+    if not cfg_path.is_file():
+        cfg_path = EXAMPLE_YAML
+    try:
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        image = str((data.get("runpod") or {}).get("image") or "").strip()
+        return image or DEFAULT_RUNPOD_IMAGE
+    except Exception:
+        return DEFAULT_RUNPOD_IMAGE
+
+
 def load_app_config(workdir: Path) -> AppConfig:
     env_path = workdir / ".env"
     cfg_path = workdir / "config.yaml"
@@ -222,6 +236,8 @@ def config_for_job(base: AppConfig, **overrides: Any) -> AppConfig:
         runpod = replace(runpod, gpu=str(overrides["gpu"]))
     if "cloud" in overrides and overrides["cloud"]:
         runpod = replace(runpod, cloud=str(overrides["cloud"]).upper())
+    if "image" in overrides and overrides["image"]:
+        runpod = replace(runpod, image=str(overrides["image"]).strip())
     if "dataset_archive" in overrides and overrides["dataset_archive"]:
         storage = replace(storage, dataset_archive=str(overrides["dataset_archive"]))
     if "build_archive" in overrides and overrides["build_archive"]:
@@ -234,9 +250,11 @@ def config_for_job(base: AppConfig, **overrides: Any) -> AppConfig:
     if "max_cap" in overrides:
         lf_kw["max_cap"] = overrides["max_cap"]
     if "enable_sparsity" in overrides:
-        lf_kw["enable_sparsity"] = bool(overrides["enable_sparsity"])
+        val = overrides["enable_sparsity"]
+        lf_kw["enable_sparsity"] = None if val is None else bool(val)
     if "gut" in overrides:
-        lf_kw["gut"] = bool(overrides["gut"])
+        val = overrides["gut"]
+        lf_kw["gut"] = None if val is None else bool(val)
     if lf_kw:
         lichtfeld = replace(lichtfeld, **lf_kw)
     return replace(

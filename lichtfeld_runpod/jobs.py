@@ -41,8 +41,11 @@ class Job:
     auto_download: bool
     terminate_when_done: bool
     max_cap: int | None
-    enable_sparsity: bool
-    gut: bool
+    enable_sparsity: bool | None
+    gut: bool | None
+    image: str = ""
+    config_local: str = ""
+    upload_as_is: bool = False
     pod_id: str | None = None
     ssh_host: str | None = None
     ssh_port: int | None = None

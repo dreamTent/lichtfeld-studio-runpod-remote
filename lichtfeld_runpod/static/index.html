@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LichtFeld · RunPod</title>
-  <link rel="stylesheet" href="/static/style.css?v=6">
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
   <header class="top">
@@ -71,33 +71,57 @@
         <fieldset>
           <legend>Dataset</legend>
           <label class="inline"><input type="radio" name="dataset_source" value="ftp" checked> Existing FTP archive</label>
-          <label class="inline"><input type="radio" name="dataset_source" value="local"> Local folder (tar + upload)</label>
+          <label class="inline"><input type="radio" name="dataset_source" value="local"> Local folder or archive (upload)</label>
           <label id="ftp-dataset-wrap">FTP archive
             <select name="dataset_archive" id="dataset-select">
               <option value="">Loading…</option>
             </select>
           </label>
           <div id="local-dataset-wrap" hidden>
-            <label>Local folder
-              <input name="dataset_local" id="dataset-local" placeholder="/home/you/scene" >
+            <label>Local folder or archive
+              <input name="dataset_local" id="dataset-local" placeholder="datasets/my-scene">
+            </label>
+            <div class="row-actions">
+              <button type="button" id="pick-folder">Browse folder…</button>
+              <button type="button" id="pick-archive">Browse archive…</button>
+            </div>
+            <label class="inline" id="upload-as-is-wrap" hidden>
+              <input type="checkbox" name="upload_as_is" id="upload-as-is"> Upload this archive as-is (do not copy into the job folder)
             </label>
             <div class="fs" id="fs-browser"></div>
           </div>
         </fieldset>
-        <label>LichtFeld config (relative to scene root)
+        <label>RunPod image
+          <input name="image" id="job-image" placeholder="runpod/pytorch:…">
+        </label>
+        <label>LichtFeld config in dataset (relative to scene root)
           <input name="config" id="config-rel" placeholder="auto if detected, otherwise optional">
         </label>
         <p class="note" id="config-note"></p>
+        <label>Or upload a separate LichtFeld config
+          <input name="config_local" id="config-local" placeholder="optional local .json">
+        </label>
+        <div class="row-actions">
+          <button type="button" id="pick-config">Browse JSON…</button>
+        </div>
         <label>Result folder on FTP
           <input name="result_dir" placeholder="lichtfeld-results/job-name">
         </label>
-        <label>Max Gaussians <input name="max_cap" type="number" value="10000000" min="0"></label>
-        <label class="inline"><input type="checkbox" name="enable_sparsity" checked> Sparsity</label>
-        <label class="inline"><input type="checkbox" name="gut" checked> GUT</label>
+        <fieldset>
+          <legend>
+            <label class="inline"><input type="checkbox" name="override_lichtfeld" id="override-lichtfeld"> Override LichtFeld settings</label>
+          </legend>
+          <p class="note">When off, only the LichtFeld config file and the binary defaults are used.</p>
+          <div id="override-fields" hidden>
+            <label>Max Gaussians <input name="max_cap" type="number" min="0" placeholder="from config"></label>
+            <label class="inline"><input type="checkbox" name="enable_sparsity" checked> Sparsity</label>
+            <label class="inline"><input type="checkbox" name="gut" checked> GUT</label>
+          </div>
+        </fieldset>
         <label class="inline"><input type="checkbox" name="auto_download"> Download results to this machine when done</label>
         <label class="inline"><input type="checkbox" name="terminate_when_done" checked> Pod self-terminates after FTP upload</label>
         <p class="form-error" id="job-error" hidden></p>
-        <button type="submit">Start job</button>
+        <button type="button" id="job-start">Start job</button>
       </form>
     </section>
 
@@ -121,6 +145,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>

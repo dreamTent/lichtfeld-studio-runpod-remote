@@ -28,23 +28,25 @@ todo:
 
 
 ## before releaser
-- [ ] make pod list refresh do every 30 seconds
-- [ ] make pressing enter in a field in the new job menu not create job as it could be pressed accidentally
-- [ ] add field for entering runpod image template name in the new job menu (or modifying it from default)
+- [x] make pod list refresh do every 30 seconds
+- [x] make pressing enter in a field in the new job menu not create job as it could be pressed accidentally
+- [x] add field for entering runpod image template name in the new job menu (or modifying it from default)
 - [x] ftp uploads should end with .upload and then be renamed after the upload completes
 - [x] when the remote server uploads the results to the ftp server it appends .upload to the folder and then renames the folder after all containing files are uploaded to the ftp server
 
-- [ ] add option to abort ftp upload
+- [x] add option to abort ftp upload
 
-- [ ] allow for a seperate config file for lichtfeld studio to be uploaded and then used by the pod instead of one included in the tar file
-- [ ] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there (as option)
+- [x] allow for a seperate config file for lichtfeld studio to be uploaded and then used by the pod instead of one included in the tar file
+- [x] when uploading to ftp and the path selected is already a tar file, dont copy it, upload it from there (as option)
 
 - [x] ftp upload show progress in ui
-- [ ] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets
+- [x] have a folder called datasets (if not create at startup), that is the default local folder for the app to look in for local datasets
 
-- [ ] make settings override optional in ui, so that only a config file gets used
+- [x] make settings override in the new job menu for lichtfield studio settings optional in ui, so that only the config file gets used as settings for lichtfield studio, and nothing gets overriden
 
-- [ ] better file selection for local upload
+- [x] better file selection for local upload
+
+- [x] add open result folder function for jobs that have suceeded and are locally downloaded
 
 bugs
 - after a job is done it switches to "completed presumably"

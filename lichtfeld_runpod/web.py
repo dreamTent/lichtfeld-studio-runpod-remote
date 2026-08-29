@@ -14,10 +14,18 @@ from .config import (
     ConfigError,
     load_app_config,
     mask_secret,
+    peek_runpod_image,
     read_env_file,
     write_env_file,
 )
-from .localfs import list_local_dir
+from .localfs import (
+    ARCHIVE_FILETYPES,
+    JSON_FILETYPES,
+    ensure_datasets_dir,
+    list_local_dir,
+    native_picker_available,
+    pick_local_path,
+)
 from .log import log
 from .manager import JobManager
 from .runpod import RunpodClient, RunpodError
@@ -38,17 +46,26 @@ class JobIn(BaseModel):
     name: str = ""
     gpu: str
     cloud: str = "SECURE"
+    image: str = ""
     build_archive: str
     dataset_source: str = "ftp"
     dataset_archive: str = ""
     dataset_local: str = ""
     result_dir: str = ""
     config: str = ""
+    config_local: str = ""
+    upload_as_is: bool = False
     auto_download: bool = False
     terminate_when_done: bool = True
-    max_cap: int | None = 10_000_000
-    enable_sparsity: bool = True
-    gut: bool = True
+    max_cap: int | None = None
+    enable_sparsity: bool | None = None
+    gut: bool | None = None
+
+
+class PickIn(BaseModel):
+    kind: str = "dir"
+    start: str = ""
+    purpose: str = ""
 
 
 def create_app(workdir: Path | None = None) -> FastAPI:
@@ -196,6 +213,28 @@ def create_app(workdir: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found") from e
         return {"ok": True, "id": job_id}
 
+    @app.post("/api/jobs/{job_id}/open-results")
+    def open_job_results(job_id: str) -> dict:
+        try:
+            return manager.open_local_results(job_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/api/jobs/{job_id}/abort-upload")
+    def abort_job_upload(job_id: str) -> dict:
+        try:
+            return manager.abort_upload(job_id).to_dict()
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail="job not found") from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     @app.post("/api/pods/{pod_id}/discard")
     def discard_pod(pod_id: str) -> dict:
         try:
@@ -219,6 +258,15 @@ def create_app(workdir: Path | None = None) -> FastAPI:
         except RunpodError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
         return {"gpus": items}
+
+    @app.get("/api/defaults")
+    def defaults() -> dict:
+        datasets = ensure_datasets_dir(workdir)
+        return {
+            "image": peek_runpod_image(workdir),
+            "datasets_dir": str(datasets),
+            "native_picker": native_picker_available(),
+        }
 
     @app.get("/api/ftp/builds")
     def ftp_builds() -> dict:
@@ -248,13 +296,36 @@ def create_app(workdir: Path | None = None) -> FastAPI:
     @app.get("/api/fs")
     def fs_browse(path: str = Query(default="")) -> dict:
         home = Path.home().resolve()
-        target = Path(path).expanduser() if path else home
+        datasets = ensure_datasets_dir(workdir)
+        target = Path(path).expanduser() if path else datasets
         try:
-            return list_local_dir(target, home)
+            return list_local_dir(target, home, workdir)
         except PermissionError as e:
             raise HTTPException(status_code=403, detail=str(e)) from e
         except (FileNotFoundError, NotADirectoryError) as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/api/fs/pick")
+    def fs_pick(body: PickIn) -> dict:
+        kind = (body.kind or "dir").strip().lower()
+        if kind not in {"dir", "file"}:
+            raise HTTPException(status_code=400, detail="kind must be dir or file")
+        datasets = ensure_datasets_dir(workdir)
+        start = Path(body.start).expanduser() if body.start else datasets
+        purpose = (body.purpose or "").strip().lower()
+        filetypes = None
+        if kind == "file":
+            if purpose == "json":
+                filetypes = JSON_FILETYPES
+            elif purpose in {"archive", "dataset"}:
+                filetypes = ARCHIVE_FILETYPES
+        try:
+            chosen = pick_local_path(kind, start, filetypes)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"native file picker unavailable: {e}") from e
+        if not chosen:
+            return {"path": None, "cancelled": True}
+        return {"path": chosen, "cancelled": False}
 
     return app
 

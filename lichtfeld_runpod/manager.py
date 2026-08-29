@@ -6,20 +6,25 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig, ConfigError, config_for_job, load_app_config
+from .host import open_in_file_manager
 from .jobs import PRESUMED_COMPLETE_MESSAGE, Job, JobStore, default_job_name, new_id
 from .log import log
 from .orchestrate import fetch_log_tail, format_progress, inject_and_start, poll_remote_state
 from .runpod import RunpodClient, RunpodError, pod_is_running, ssh_endpoint
 from .sshutil import Ssh, SshError, ensure_ed25519, ftp_check_due, write_ssh_config
 from .status import HEARTBEAT_STALE_SECONDS, heartbeat_ok, job_indicator, pod_indicator
+from .localfs import ensure_datasets_dir
 from .storage import (
     CurlProgress,
+    UploadAborted,
     curl_put,
     download_result_dir,
     format_transfer_progress,
-    list_remote_files,
+    is_archive_path,
+    remote_delete,
     remote_size,
     results_look_complete,
+    staging_remote_path,
     tar_directory,
     uploaded_dataset_path,
     write_netrc,
@@ -27,7 +32,8 @@ from .storage import (
 
 
 ACTIVE_PHASES = {"created", "uploading_dataset", "waiting_for_pod", "starting", "running"}
-POLL_SECONDS = 8
+UPLOAD_ABORT_PHASES = {"created", "uploading_dataset"}
+POLL_SECONDS = 30
 
 
 class JobManager:
@@ -47,6 +53,7 @@ class JobManager:
         self._next_pod_list_at: float | None = None
 
     def start(self) -> None:
+        ensure_datasets_dir(self.workdir)
         self._reconcile_from_ftp()
         for job in self.store.all():
             if job.phase in ACTIVE_PHASES:
@@ -82,8 +89,11 @@ class JobManager:
             auto_download=bool(spec.get("auto_download", False)),
             terminate_when_done=bool(spec.get("terminate_when_done", True)),
             max_cap=spec.get("max_cap"),
-            enable_sparsity=bool(spec.get("enable_sparsity", True)),
-            gut=bool(spec.get("gut", True)),
+            enable_sparsity=spec.get("enable_sparsity"),
+            gut=spec.get("gut"),
+            image=str(spec.get("image") or "").strip(),
+            config_local=str(spec.get("config_local") or "").strip(),
+            upload_as_is=bool(spec.get("upload_as_is", False)),
             message="created",
             created_at=now,
             updated_at=now,
@@ -91,7 +101,15 @@ class JobManager:
         if job.dataset_source == "ftp" and not job.dataset_archive:
             raise ValueError("select a dataset archive on the FTP server")
         if job.dataset_source == "local" and not job.dataset_local:
-            raise ValueError("select a local dataset directory")
+            raise ValueError("select a local dataset folder or archive")
+        if job.dataset_source == "local":
+            local = Path(job.dataset_local).expanduser()
+            if not local.exists():
+                raise ValueError(f"local dataset not found: {local}")
+        if job.config_local:
+            cfg_path = Path(job.config_local).expanduser()
+            if not cfg_path.is_file():
+                raise ValueError(f"LichtFeld config not found: {cfg_path}")
         if not job.build_archive:
             raise ValueError("select a LichtFeld build from the FTP server")
         self._save(job)
@@ -155,6 +173,69 @@ class JobManager:
             self._api_pods = [p for p in self._api_pods if str(p.get("id") or "") != pod_id]
         self._refresh_pods()
         return {"ok": True, "id": pod_id}
+
+    def abort_upload(self, job_id: str) -> Job:
+        job = self.store.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.phase not in UPLOAD_ABORT_PHASES:
+            raise ValueError(f"cannot abort upload in phase {job.phase}")
+        self._halt_job(job_id)
+        job = self.store.get(job_id) or job
+        remote = (job.dataset_archive or "").strip()
+        if remote:
+            try:
+                cfg = load_app_config(self.workdir)
+                netrc = self.store.workdir(job.id) / "netrc"
+                remote_delete(
+                    cfg.storage,
+                    staging_remote_path(remote),
+                    netrc if netrc.is_file() else None,
+                )
+            except Exception as e:
+                log("ftp", f"abort cleanup: {e}")
+        return self._update(job, phase="error", error="upload aborted", message="upload aborted")
+
+    def local_results_dir(self, job: Job) -> Path | None:
+        """Return the downloaded results folder if this completed job has one on disk."""
+        if job.phase != "complete":
+            return None
+        expected = (self.workdir / "results" / job.id).resolve()
+        recorded = (job.local_results or "").strip()
+        candidates: list[Path] = []
+        if recorded:
+            candidates.append(Path(recorded).expanduser())
+        candidates.append(expected)
+        workdir = self.workdir.resolve()
+        seen: set[Path] = set()
+        for path in candidates:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if not resolved.is_dir():
+                continue
+            try:
+                resolved.relative_to(workdir)
+            except ValueError:
+                continue
+            return resolved
+        return None
+
+    def open_local_results(self, job_id: str) -> dict[str, Any]:
+        job = self.store.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.phase != "complete":
+            raise ValueError("results are only available after the job succeeds")
+        dest = self.local_results_dir(job)
+        if dest is None:
+            raise FileNotFoundError("no local results folder for this job")
+        open_in_file_manager(dest)
+        return {"ok": True, "id": job.id, "path": str(dest)}
 
     def _halt_job(self, job_id: str) -> None:
         with self._lock:
@@ -243,6 +324,7 @@ class JobManager:
                     "color": job_indicator(job.phase, pod_color_by_job.get(job.id) if job.pod_id else None),
                     "next_check_at": next_at,
                     "next_check_kind": kind,
+                    "local_results_ready": self.local_results_dir(job) is not None,
                 }
             )
         return {"jobs": job_rows, "pods": pod_rows, "next_pod_list_at": next_pod_list_at}
@@ -433,6 +515,9 @@ class JobManager:
         self.store.save(job)
 
     def _update(self, job: Job, **fields: Any) -> Job:
+        if job.id in self._halted and fields.get("phase") not in {"error", "complete"}:
+            stored = self.store.get(job.id)
+            return stored or job
         for k, v in fields.items():
             setattr(job, k, v)
         self._save(job)
@@ -445,6 +530,7 @@ class JobManager:
             job_name=job.name,
             gpu=job.gpu,
             cloud=job.cloud,
+            image=job.image,
             dataset_archive=job.dataset_archive,
             build_archive=job.build_archive,
             result_dir=job.result_dir,
@@ -493,6 +579,13 @@ class JobManager:
 
             if job.injected and job.phase not in {"complete", "error"}:
                 self._watch(job, cfg)
+        except UploadAborted:
+            log("job", f"{job_id} upload aborted")
+            if job_id in self._dropped or job_id in self._halted:
+                return
+            job = self.store.get(job_id)
+            if job and job.phase not in {"complete"}:
+                self._update(job, phase="error", error="upload aborted", message="upload aborted")
         except Exception as e:
             log("job", f"{job_id} failed: {e}")
             if job_id in self._dropped or job_id in self._halted:
@@ -510,10 +603,17 @@ class JobManager:
     def _upload_local_dataset(self, job: Job, cfg: AppConfig, run_dir: Path, netrc: Path) -> None:
         self._update(job, phase="uploading_dataset", message="packing dataset")
         src = Path(job.dataset_local).expanduser()
-        tar_path = run_dir / "dataset.tar"
-        tar_directory(src, tar_path)
+        as_is = bool(job.upload_as_is) and src.is_file() and is_archive_path(src)
+        if as_is:
+            local = src
+        else:
+            tar_path = run_dir / "dataset.tar"
+            tar_directory(src, tar_path)
+            local = tar_path
+        if self._job_should_stop(job.id):
+            raise UploadAborted("upload aborted")
         remote = uploaded_dataset_path(src, job.id)
-        total = tar_path.stat().st_size
+        total = local.stat().st_size
         self._update(
             job,
             message=format_transfer_progress("upload dataset", 0, total),
@@ -533,7 +633,14 @@ class JobManager:
             self._update(job, message=msg, log_tail=msg)
             log("ftp", msg)
 
-        curl_put(cfg.storage, tar_path, remote, netrc, on_progress=on_progress)
+        curl_put(
+            cfg.storage,
+            local,
+            remote,
+            netrc,
+            on_progress=on_progress,
+            should_stop=lambda: self._job_should_stop(job.id),
+        )
         self._update(job, dataset_archive=remote, message="dataset uploaded")
 
     def _create_pod(self, job: Job, cfg: AppConfig) -> None:
@@ -603,6 +710,11 @@ class JobManager:
         build_bytes = job.build_bytes or remote_size(cfg.storage, cfg.storage.build_archive)
         dataset_bytes = job.dataset_bytes or remote_size(cfg.storage, cfg.storage.dataset_archive)
         self._update(job, build_bytes=build_bytes, dataset_bytes=dataset_bytes)
+        if job.config_local:
+            src = Path(job.config_local).expanduser()
+            if not src.is_file():
+                raise FileNotFoundError(f"LichtFeld config not found: {src}")
+            (run_dir / "lichtfeld-config.json").write_bytes(src.read_bytes())
         inject_and_start(ssh, cfg, run_dir, job.pod_id, build_bytes, dataset_bytes)
         self._update(job, injected=True, phase="running", last_ssh_ok=time.time(), message="pipeline started")
 

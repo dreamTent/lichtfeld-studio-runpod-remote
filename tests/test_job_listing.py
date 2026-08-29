@@ -76,10 +76,15 @@ class JobListingTests(unittest.TestCase):
             self.assertIsNone(row["next_check_at"])
             self.assertIsNone(row["next_check_kind"])
             with mgr._lock:
-                mgr._next_pod_list_at = time.time() + 8
+                mgr._next_pod_list_at = time.time() + 30
             later = mgr.snapshot()
             self.assertGreater(later["next_pod_list_at"], time.time())
-            self.assertLessEqual(later["next_pod_list_at"], time.time() + 9)
+            self.assertLessEqual(later["next_pod_list_at"], time.time() + 31)
+
+    def test_poll_seconds_is_thirty(self) -> None:
+        from lichtfeld_runpod.manager import POLL_SECONDS
+
+        self.assertEqual(POLL_SECONDS, 30)
 
     def test_delete_removes_listing_not_results_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -97,6 +102,98 @@ class JobListingTests(unittest.TestCase):
             self.assertFalse((root / "jobs" / job.id).exists())
             self.assertTrue((results / "REPORT.md").is_file())
             self.assertFalse(store.delete(job.id))
+
+
+class OpenLocalResultsTests(unittest.TestCase):
+    def test_snapshot_flags_ready_when_folder_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mgr = JobManager(root)
+            dest = root / "results" / "abc123def456"
+            dest.mkdir(parents=True)
+            job = _job(phase="complete", local_results=str(dest), auto_download=True)
+            mgr.store.save(job)
+            row = mgr.snapshot()["jobs"][0]
+            self.assertTrue(row["local_results_ready"])
+            self.assertEqual(mgr.local_results_dir(job), dest.resolve())
+
+    def test_snapshot_not_ready_without_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="complete", auto_download=True, local_results="")
+            mgr.store.save(job)
+            row = mgr.snapshot()["jobs"][0]
+            self.assertFalse(row["local_results_ready"])
+
+    def test_snapshot_not_ready_while_running(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mgr = JobManager(root)
+            dest = root / "results" / "abc123def456"
+            dest.mkdir(parents=True)
+            job = _job(phase="running", local_results=str(dest), auto_download=True)
+            mgr.store.save(job)
+            self.assertFalse(mgr.snapshot()["jobs"][0]["local_results_ready"])
+            self.assertIsNone(mgr.local_results_dir(job))
+
+    def test_open_local_results_opens_downloaded_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mgr = JobManager(root)
+            dest = root / "results" / "abc123def456"
+            dest.mkdir(parents=True)
+            job = _job(phase="complete", local_results=str(dest), auto_download=True)
+            mgr.store.save(job)
+            with patch("lichtfeld_runpod.manager.open_in_file_manager") as open_fn:
+                out = mgr.open_local_results(job.id)
+            open_fn.assert_called_once_with(dest.resolve())
+            self.assertEqual(out, {"ok": True, "id": job.id, "path": str(dest.resolve())})
+
+    def test_open_local_results_uses_default_results_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mgr = JobManager(root)
+            dest = root / "results" / "abc123def456"
+            dest.mkdir(parents=True)
+            job = _job(phase="complete", local_results="", auto_download=True)
+            mgr.store.save(job)
+            with patch("lichtfeld_runpod.manager.open_in_file_manager") as open_fn:
+                out = mgr.open_local_results(job.id)
+            open_fn.assert_called_once_with(dest.resolve())
+            self.assertEqual(out["path"], str(dest.resolve()))
+
+    def test_open_local_results_rejects_running_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running")
+            mgr.store.save(job)
+            with self.assertRaises(ValueError):
+                mgr.open_local_results(job.id)
+
+    def test_open_local_results_rejects_missing_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="complete", local_results="", auto_download=True)
+            mgr.store.save(job)
+            with self.assertRaises(FileNotFoundError):
+                mgr.open_local_results(job.id)
+
+    def test_open_local_results_rejects_path_outside_workdir(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mgr = JobManager(root / "workdir")
+            outside = root / "elsewhere"
+            outside.mkdir()
+            job = _job(phase="complete", local_results=str(outside), auto_download=True)
+            mgr.store.save(job)
+            with self.assertRaises(FileNotFoundError):
+                mgr.open_local_results(job.id)
+
+    def test_open_local_results_unknown_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            with self.assertRaises(KeyError):
+                mgr.open_local_results("missing")
 
 
 class FakeSsh:
@@ -264,6 +361,67 @@ class RunJobConfigTests(unittest.TestCase):
             ):
                 mgr._run_job(job.id)
             self.assertEqual(captured["dataset"], f"lichtfeld-datasets/{job.id}.tar")
+
+    def test_upload_as_is_skips_packing_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive = root / "scene.tar"
+            archive.write_bytes(b"abc")
+            mgr = JobManager(root)
+            job = _job(
+                phase="created",
+                dataset_source="local",
+                dataset_local=str(archive),
+                upload_as_is=True,
+            )
+            mgr.store.save(job)
+            run_dir = mgr.store.workdir(job.id)
+            netrc = run_dir / "netrc"
+            netrc.write_text("x", encoding="utf-8")
+            with (
+                patch("lichtfeld_runpod.manager.tar_directory") as tar,
+                patch("lichtfeld_runpod.manager.curl_put") as put,
+            ):
+                mgr._upload_local_dataset(job, _app_cfg(), run_dir, netrc)
+            tar.assert_not_called()
+            put.assert_called_once()
+            self.assertEqual(Path(put.call_args[0][1]), archive)
+
+    def test_abort_upload_halts_and_deletes_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="uploading_dataset", dataset_archive="lichtfeld-datasets/scene.tar")
+            mgr.store.save(job)
+            with (
+                patch("lichtfeld_runpod.manager.load_app_config", return_value=_app_cfg()),
+                patch("lichtfeld_runpod.manager.remote_delete") as delete,
+            ):
+                out = mgr.abort_upload(job.id)
+            self.assertEqual(out.phase, "error")
+            self.assertEqual(out.message, "upload aborted")
+            self.assertTrue(mgr._job_should_stop(job.id))
+            delete.assert_called_once()
+            self.assertEqual(delete.call_args[0][1], "lichtfeld-datasets/scene.tar.upload")
+
+    def test_abort_upload_rejects_running_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="running")
+            mgr.store.save(job)
+            with self.assertRaises(ValueError):
+                mgr.abort_upload(job.id)
+
+    def test_halted_progress_does_not_overwrite_abort(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            job = _job(phase="uploading_dataset")
+            mgr.store.save(job)
+            mgr._halt_job(job.id)
+            mgr._update(job, phase="error", error="upload aborted", message="upload aborted")
+            mgr._update(job, message="upload dataset 50%")
+            stored = mgr.store.get(job.id)
+            self.assertEqual(stored.phase, "error")
+            self.assertEqual(stored.message, "upload aborted")
 
     def test_dead_pid_marks_job_error(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

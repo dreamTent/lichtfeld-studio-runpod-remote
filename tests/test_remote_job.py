@@ -90,6 +90,26 @@ class RemoteJobScriptTests(unittest.TestCase):
         self.assertIn("lichtfeld-results/t.upload", text)
         self.assertNotIn("RNFR", text)
 
+    def test_omits_override_flags_when_unset(self) -> None:
+        from dataclasses import replace
+
+        cfg = _cfg()
+        cfg = replace(
+            cfg,
+            lichtfeld=replace(cfg.lichtfeld, max_cap=None, enable_sparsity=None, gut=None),
+        )
+        text = render_job_script(cfg, 1, 1, pod_id="podabc")
+        self.assertNotIn("--max-cap", text)
+        self.assertNotIn("--enable-sparsity", text)
+        self.assertNotIn("--gut", text)
+        self.assertIn("--headless", text)
+
+    def test_prefers_uploaded_sidecar_config(self) -> None:
+        text = render_job_script(_cfg(), 1, 1, pod_id="podabc")
+        self.assertIn("/workspace/lichtfeld-config.json", text)
+        self.assertIn("Using uploaded config /workspace/lichtfeld-config.json", text)
+        self.assertIn('elif [[ -n "$CONFIG_REL" ]]', text)
+
     def test_client_does_not_terminate_on_success(self) -> None:
         import inspect
         from lichtfeld_runpod import orchestrate
