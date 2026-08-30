@@ -16,13 +16,17 @@ const state = {
 function showView(name) {
   state.view = name;
   $$("nav [data-view]").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  ["dash", "new", "settings"].forEach((v) => {
+  ["dash", "new", "build", "settings"].forEach((v) => {
     const node = $(`#view-${v}`);
     if (node) node.hidden = v !== name;
   });
   if (name === "new") {
     fillDefaultJobName();
     loadJobOptions();
+  }
+  if (name === "build") {
+    fillDefaultBuildName();
+    loadBuildOptions();
   }
   if (name === "settings") loadSettings();
 }
@@ -54,6 +58,12 @@ function defaultJobName() {
 
 function fillDefaultJobName(force = false) {
   const input = $("#job-name");
+  if (!input) return;
+  if (force || !input.value.trim()) input.value = defaultJobName();
+}
+
+function fillDefaultBuildName(force = false) {
+  const input = $("#build-name");
   if (!input) return;
   if (force || !input.value.trim()) input.value = defaultJobName();
 }
@@ -163,9 +173,9 @@ function rowSubtitle(row) {
   const pod = row.pod;
   if (job) {
     const checking = state.reloading === job.id;
-    const bits = [job.message || job.phase, lastUpdateLabel(job, checking)];
+    const bits = [job.kind === "build" ? "build" : null, job.message || job.phase, lastUpdateLabel(job, checking)];
     if (job.gpu) bits.push(job.gpu);
-    return bits.join(" · ");
+    return bits.filter(Boolean).join(" · ");
   }
   return [pod.status, pod.gpu, "foreign"].filter(Boolean).join(" · ");
 }
@@ -236,8 +246,15 @@ function renderDetail() {
     kv.push(["GPU", `${job.gpu || "—"} / ${job.cloud || "—"}`]);
     kv.push(["Pod", job.pod_id || pod?.id || "—"]);
     kv.push(["SSH", pod?.ssh || "—"]);
-    kv.push(["Build", job.build_archive || "—"]);
-    kv.push(["Dataset", job.dataset_archive || job.dataset_local || "—"]);
+    if (job.kind === "build") {
+      kv.push(["Git", job.git_ref || "—"]);
+      kv.push(["CUDA arch", job.cuda_arch ? `sm_${job.cuda_arch}` : "—"]);
+      kv.push(["Repo", job.repo_url || "—"]);
+      kv.push(["Archive", job.build_archive || "—"]);
+    } else {
+      kv.push(["Build", job.build_archive || "—"]);
+      kv.push(["Dataset", job.dataset_archive || job.dataset_local || "—"]);
+    }
     kv.push(["Results", job.result_dir || "—"]);
     kv.push(["Download", job.auto_download ? "local + FTP" : "FTP only"]);
     if (job.local_results) kv.push(["Local folder", job.local_results]);
@@ -688,6 +705,117 @@ $("#job-form").addEventListener("submit", (e) => {
 });
 
 $("#job-start")?.addEventListener("click", () => submitJob());
+
+const buildAuto = { cuda: true, result: true, archive: true };
+
+async function refreshBuildPaths() {
+  const gpu = $("#build-gpu")?.value || "NVIDIA L40S";
+  const gitRef = $("#build-git-ref")?.value.trim() || "";
+  const params = new URLSearchParams({ gpu, git_ref: gitRef });
+  if (!buildAuto.cuda) {
+    const arch = $("#build-cuda-arch")?.value.trim();
+    if (arch) params.set("cuda_arch", arch);
+  }
+  try {
+    const data = await api(`/api/build-defaults?${params}`);
+    if (buildAuto.cuda && data.cuda_arch) $("#build-cuda-arch").value = data.cuda_arch;
+    if (buildAuto.result && data.result_dir) $("#build-result-dir").value = data.result_dir;
+    if (buildAuto.archive && data.archive_name) $("#build-archive-name").value = data.archive_name;
+    const repo = $("#build-repo");
+    if (repo && !repo.value.trim() && data.repo_url) repo.value = data.repo_url;
+    const image = $("#build-image");
+    if (image && !image.value.trim() && data.image) image.value = data.image;
+  } catch (err) {
+    const box = $("#build-error");
+    if (box) {
+      box.textContent = err.message;
+      box.hidden = false;
+    }
+  }
+}
+
+async function loadBuildOptions() {
+  $("#build-error").hidden = true;
+  try {
+    const [gpus, defaults] = await Promise.all([api("/api/gpus"), api("/api/defaults")]);
+    const imageInput = $("#build-image");
+    if (imageInput && !imageInput.value.trim()) imageInput.value = defaults.image || "";
+    const repo = $("#build-repo");
+    if (repo && !repo.value.trim() && defaults.repo_url) repo.value = defaults.repo_url;
+    const gitRef = $("#build-git-ref");
+    if (gitRef && !gitRef.value.trim() && defaults.git_ref) gitRef.value = defaults.git_ref;
+    fillSelect(
+      $("#build-gpu"),
+      gpus.gpus.map((g) => ({
+        value: g.id,
+        label: `${g.name}${g.memory_gb ? ` (${g.memory_gb} GB)` : ""}${g.availability ? ` · ${g.availability}` : ""}`,
+      })),
+      $("#build-gpu").value || "NVIDIA L40S"
+    );
+    await refreshBuildPaths();
+  } catch (err) {
+    $("#build-error").textContent = err.message;
+    $("#build-error").hidden = false;
+  }
+}
+
+async function submitBuild() {
+  const form = $("#build-form");
+  $("#build-error").hidden = true;
+  const body = {
+    kind: "build",
+    name: form.name.value,
+    gpu: form.gpu.value,
+    cloud: form.cloud.value,
+    image: form.image.value,
+    git_ref: form.git_ref.value,
+    cuda_arch: form.cuda_arch.value,
+    repo_url: form.repo_url.value,
+    result_dir: form.result_dir.value,
+    archive_name: form.archive_name.value,
+    auto_download: form.auto_download.checked,
+    terminate_when_done: form.terminate_when_done.checked,
+  };
+  try {
+    const job = await api("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    fillDefaultBuildName(true);
+    buildAuto.cuda = true;
+    buildAuto.result = true;
+    buildAuto.archive = true;
+    select({ kind: "job", id: job.id });
+  } catch (err) {
+    $("#build-error").textContent = err.message;
+    $("#build-error").hidden = false;
+  }
+}
+
+$("#build-gpu")?.addEventListener("change", () => {
+  buildAuto.cuda = true;
+  refreshBuildPaths();
+});
+$("#build-git-ref")?.addEventListener("input", () => refreshBuildPaths());
+$("#build-cuda-arch")?.addEventListener("input", () => {
+  buildAuto.cuda = false;
+  refreshBuildPaths();
+});
+$("#build-result-dir")?.addEventListener("input", () => {
+  buildAuto.result = false;
+});
+$("#build-archive-name")?.addEventListener("input", () => {
+  buildAuto.archive = false;
+});
+
+$("#build-form")?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.target.tagName === "TEXTAREA") return;
+  if (e.target.id === "build-start") return;
+  e.preventDefault();
+});
+$("#build-form")?.addEventListener("submit", (e) => e.preventDefault());
+$("#build-start")?.addEventListener("click", () => submitBuild());
 
 function applySnapshot(data) {
   state.data = data;

@@ -8,7 +8,7 @@ from .config import AppConfig
 from .host import restrict_secret_file, write_text_lf
 from .jobs import PRESUMED_COMPLETE_MESSAGE
 from .log import log
-from .remote_job import render_job_script
+from .remote_job import render_build_env, render_job_script, resolve_build_script
 from .runpod import RunpodClient, RunpodError, ssh_endpoint
 from .sshutil import Ssh, ensure_ed25519, ftp_check_due, write_ssh_config
 from .storage import remote_size, results_look_complete, verify_uploaded, write_netrc
@@ -21,6 +21,8 @@ POLL_CMD = (
     "echo STAGE:$(cat /workspace/state/STAGE 2>/dev/null || echo starting); "
     "echo BUILD:$(stat -c%s /workspace/lichtfeld-build.tar.gz 2>/dev/null || echo 0); "
     "echo DATA:$(stat -c%s /workspace/dataset/scene.tar 2>/dev/null || echo 0); "
+    "echo ARCHIVE:$(stat -c%s /workspace/out/*.tar.gz 2>/dev/null | awk '{s+=$1} END {print s+0}'); "
+    "echo COMPILE:$(grep -oE '\\[[0-9]+/[0-9]+\\]' /workspace/logs/pipeline.log 2>/dev/null | tail -1); "
     "echo DONE:$(test -f /workspace/state/upload.done && echo 1 || echo 0); "
     "echo EXIT:$(cat /workspace/state/train.exit 2>/dev/null || echo); "
     "echo HB:$(cat /workspace/state/HEARTBEAT 2>/dev/null || echo); "
@@ -141,6 +143,13 @@ def inject_and_start(
     pod_id: str,
     build_bytes: int | None,
     dataset_bytes: int | None,
+    *,
+    kind: str = "train",
+    git_ref: str = "",
+    cuda_arch: str = "",
+    repo_url: str = "",
+    archive_name: str = "",
+    app_workdir: Path | None = None,
 ) -> None:
     """Copy credentials + job script and start it under nohup. The pod owns the rest."""
     netrc = run_dir / "netrc"
@@ -156,15 +165,35 @@ def inject_and_start(
     if sidecar.is_file():
         ssh.put(sidecar, "/workspace/lichtfeld-config.json")
 
-    script_text = render_job_script(cfg, build_bytes, dataset_bytes, pod_id=pod_id)
-    local_script = run_dir / "remote_job.sh"
-    write_text_lf(local_script, script_text)
-    ssh.put(local_script, "/workspace/remote_job.sh")
-    ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_job.sh")
+    if kind == "build":
+        env_text = render_build_env(
+            cfg,
+            pod_id=pod_id,
+            git_ref=git_ref,
+            cuda_arch=cuda_arch,
+            repo_url=repo_url,
+            archive_name=archive_name,
+        )
+        env_path = run_dir / "build.env"
+        write_text_lf(env_path, env_text)
+        script_src = resolve_build_script(app_workdir)
+        local_script = run_dir / "remote_build.sh"
+        write_text_lf(local_script, script_src.read_text(encoding="utf-8"))
+        ssh.put(env_path, "/workspace/build.env")
+        ssh.put(local_script, "/workspace/remote_build.sh")
+        ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_build.sh")
+        remote_cmd = "/workspace/remote_build.sh"
+    else:
+        script_text = render_job_script(cfg, build_bytes, dataset_bytes, pod_id=pod_id)
+        local_script = run_dir / "remote_job.sh"
+        write_text_lf(local_script, script_text)
+        ssh.put(local_script, "/workspace/remote_job.sh")
+        ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_job.sh")
+        remote_cmd = "/workspace/remote_job.sh"
 
     log("job", "starting remote pipeline (autonomous)")
     ssh.run(
-        "nohup bash /workspace/remote_job.sh >> /workspace/logs/nohup.out 2>&1 & echo $! > /workspace/state/job.pid",
+        f"nohup bash {remote_cmd} >> /workspace/logs/nohup.out 2>&1 & echo $! > /workspace/state/job.pid",
         timeout=30,
     )
 
@@ -269,6 +298,11 @@ def format_progress(
         return _pct("download build", fields.get("BUILD"), build_bytes)
     if stage == "download_dataset":
         return _pct("download dataset", fields.get("DATA"), dataset_bytes)
+    compile_mark = (fields.get("COMPILE") or "").strip()
+    if stage == "compile" and compile_mark:
+        return f"compile {compile_mark}"
+    if stage == "pack" and fields.get("ARCHIVE") not in (None, "", "0"):
+        return _pct("pack archive", fields.get("ARCHIVE"), None)
     if stage == "train" and train_line:
         m = _TRAIN_RE.search(train_line)
         if m:
@@ -280,6 +314,18 @@ def format_progress(
                 eta = f"  remaining={em.group(1)}"
             return f"{cur}/{total} ({pct:.0f}%)  loss={loss}  splats={int(splats):,}{eta}"
         return train_line.strip()[:200]
+    labels = {
+        "apt": "installing compilers",
+        "cmake": "installing cmake",
+        "vcpkg": "bootstrapping vcpkg",
+        "clone": "cloning LichtFeld Studio",
+        "configure": "cmake configure",
+        "compile": "compiling",
+        "pack": "packing archive",
+        "upload": "uploading build",
+    }
+    if stage in labels:
+        return labels[stage]
     return stage.replace("_", " ")
 
 

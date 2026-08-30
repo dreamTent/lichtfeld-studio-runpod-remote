@@ -62,6 +62,11 @@ class Job:
     dataset_bytes: int | None = None
     injected: bool = False
     archived: bool = False
+    kind: str = "train"
+    git_ref: str = ""
+    cuda_arch: str = ""
+    repo_url: str = ""
+    archive_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

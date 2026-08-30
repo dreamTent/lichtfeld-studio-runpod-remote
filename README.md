@@ -88,7 +88,20 @@ A build archive must unpack so the binary is at `LichtFeld-Studio/build/LichtFel
 tar -czf lichtfeld-0.5.3-l40s-sm89.tar.gz LichtFeld-Studio
 ```
 
-**Create build** in the dashboard is not implemented yet, so you upload these archives yourself.
+**Create build** in the dashboard starts a run-and-forget GPU job that compiles LichtFeld Studio, packs that tree, and uploads it here. You can still upload archives yourself.
+
+### Create build
+
+Open **Create build**, pick GPU / cloud / git tag (default `v0.5.3`), and start. The pod:
+
+1. Installs GCC 14, CMake 3.30+, Ninja, and the GUI libs LichtFeld needs
+2. Bootstraps vcpkg, clones the repo, configures with `CMAKE_CUDA_ARCHITECTURES` for that GPU (L40S = `89`)
+3. Compiles, packs `LichtFeld-Studio/` (no `.git`), uploads to `lichtfeld-builds/…`, writes `REPORT.md`
+4. Self-terminates unless you turn that off
+
+That is the same recipe that produced the working L40S archive. A binary is tied to one GPU family — rebuild if you change from L40S/Ada to something else. Compile takes on the order of 45 minutes. The dashboard job uses the same status circles as training; stages are listed in [STATES.md](STATES.md).
+
+The compile pipeline lives in `lichtfeld_runpod/scripts/remote_build.sh`. To swap it, put your own `remote_build.sh` next to `config.yaml`; that file is uploaded instead of the packaged default. Job parameters (git ref, CUDA arch, FTP paths, …) are written separately as `/workspace/build.env`.
 
 ### Datasets (`lichtfeld-datasets/`)
 

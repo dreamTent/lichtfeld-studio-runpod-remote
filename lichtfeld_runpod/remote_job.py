@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from .buildspec import CMAKE_INSTALLER_VERSION
 from .config import AppConfig, StorageConfig
 from .storage import curl_url, staging_remote_path
+
+PACKAGED_BUILD_SCRIPT = Path(__file__).resolve().parent / "scripts" / "remote_build.sh"
 
 
 def render_job_script(
@@ -311,3 +316,72 @@ def _rename_remote_cmd(cfg: StorageConfig, src: str, dest: str) -> str:
 
 def _bash_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def resolve_build_script(app_workdir: Path | None = None) -> Path:
+    """Prefer a remote_build.sh next to config.yaml; otherwise the packaged default."""
+    if app_workdir is not None:
+        override = app_workdir / "remote_build.sh"
+        if override.is_file():
+            return override
+    return PACKAGED_BUILD_SCRIPT
+
+
+def render_build_env(
+    cfg: AppConfig,
+    *,
+    pod_id: str = "",
+    git_ref: str,
+    cuda_arch: str,
+    repo_url: str,
+    archive_name: str,
+) -> str:
+    result = cfg.storage.result_dir.rstrip("/")
+    result_staging = staging_remote_path(result)
+    extra_ftp = "--ftp-pasv" if cfg.storage.protocol == "ftp" else ""
+    terminate = "1" if cfg.terminate_when_done else "0"
+    cmake_url = (
+        f"https://github.com/Kitware/CMake/releases/download/v{CMAKE_INSTALLER_VERSION}/"
+        f"cmake-{CMAKE_INSTALLER_VERSION}-linux-x86_64.sh"
+    )
+    lines = [
+        f"RESULT_DIR={_bash_quote(result)}",
+        f"RESULT_STAGING={_bash_quote(result_staging)}",
+        f"RESULT_URL={_bash_quote(curl_url(cfg.storage, result_staging + '/'))}",
+        f"STORAGE_ROOT_URL={_bash_quote(curl_url(cfg.storage, ''))}",
+        f"STORAGE_PROTOCOL={_bash_quote(cfg.storage.protocol)}",
+        f"CURL_EXTRA={_bash_quote(extra_ftp)}",
+        f"POD_ID={_bash_quote(pod_id)}",
+        f"TERMINATE={terminate}",
+        f"GIT_REF={_bash_quote(git_ref)}",
+        f"CUDA_ARCH={_bash_quote(cuda_arch)}",
+        f"REPO_URL={_bash_quote(repo_url)}",
+        f"ARCHIVE_NAME={_bash_quote(archive_name)}",
+        f"GPU_LABEL={_bash_quote(cfg.runpod.gpu)}",
+        f"CMAKE_URL={_bash_quote(cmake_url)}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_build_script(
+    cfg: AppConfig,
+    *,
+    pod_id: str = "",
+    git_ref: str,
+    cuda_arch: str,
+    repo_url: str,
+    archive_name: str,
+    app_workdir: Path | None = None,
+) -> str:
+    """Env file plus the interchangeable bash pipeline (used by tests)."""
+    env = render_build_env(
+        cfg,
+        pod_id=pod_id,
+        git_ref=git_ref,
+        cuda_arch=cuda_arch,
+        repo_url=repo_url,
+        archive_name=archive_name,
+    )
+    script = resolve_build_script(app_workdir).read_text(encoding="utf-8")
+    return env + "\n" + script

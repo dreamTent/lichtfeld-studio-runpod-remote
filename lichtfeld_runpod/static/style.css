@@ -122,11 +122,11 @@ main { padding: 18px 22px 40px; }
 }
 label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
 .inline { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
-input, select, button[type="submit"], #job-start {
+input, select, button[type="submit"], #job-start, #build-start {
   background: #0b0d10; color: var(--ink); border: 1px solid var(--line); padding: 8px 10px; font: inherit;
 }
-button[type="submit"], #job-start { background: #1d3a2c; border-color: #2f5a44; color: var(--green); cursor: pointer; }
-button[type="submit"]:hover, #job-start:hover { background: #254a38; }
+button[type="submit"], #job-start, #build-start { background: #1d3a2c; border-color: #2f5a44; color: var(--green); cursor: pointer; }
+button[type="submit"]:hover, #job-start:hover, #build-start:hover { background: #254a38; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .row-actions button {
   background: #0b0d10; color: var(--ink); border: 1px solid var(--line);

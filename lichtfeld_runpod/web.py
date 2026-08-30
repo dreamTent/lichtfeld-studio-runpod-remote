@@ -10,6 +10,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .buildspec import (
+    DEFAULT_GIT_REF,
+    DEFAULT_REPO,
+    cuda_arch_for_gpu,
+    default_archive_name,
+    default_build_folder,
+)
 from .config import (
     ConfigError,
     load_app_config,
@@ -43,11 +50,12 @@ class SettingsIn(BaseModel):
 
 
 class JobIn(BaseModel):
+    kind: str = "train"
     name: str = ""
     gpu: str
     cloud: str = "SECURE"
     image: str = ""
-    build_archive: str
+    build_archive: str = ""
     dataset_source: str = "ftp"
     dataset_archive: str = ""
     dataset_local: str = ""
@@ -60,6 +68,10 @@ class JobIn(BaseModel):
     max_cap: int | None = None
     enable_sparsity: bool | None = None
     gut: bool | None = None
+    git_ref: str = ""
+    cuda_arch: str = ""
+    repo_url: str = ""
+    archive_name: str = ""
 
 
 class PickIn(BaseModel):
@@ -266,6 +278,28 @@ def create_app(workdir: Path | None = None) -> FastAPI:
             "image": peek_runpod_image(workdir),
             "datasets_dir": str(datasets),
             "native_picker": native_picker_available(),
+            "git_ref": DEFAULT_GIT_REF,
+            "repo_url": DEFAULT_REPO,
+        }
+
+    @app.get("/api/build-defaults")
+    def build_defaults(
+        gpu: str = Query(default="NVIDIA L40S"),
+        git_ref: str = Query(default=""),
+        cuda_arch: str = Query(default=""),
+    ) -> dict:
+        ref = (git_ref or "").strip() or DEFAULT_GIT_REF
+        gpu_name = (gpu or "").strip() or "NVIDIA L40S"
+        arch = (cuda_arch or "").strip() or cuda_arch_for_gpu(gpu_name)
+        folder = default_build_folder(ref, gpu_name, arch)
+        name = default_archive_name(ref, gpu_name, arch)
+        return {
+            "git_ref": ref,
+            "repo_url": DEFAULT_REPO,
+            "cuda_arch": arch,
+            "result_dir": folder,
+            "archive_name": name,
+            "image": peek_runpod_image(workdir),
         }
 
     @app.get("/api/ftp/builds")

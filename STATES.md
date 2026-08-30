@@ -59,8 +59,15 @@ These are written to `/workspace/state/STAGE` on the pod. They are the job’s `
 | `extract_build` | Unpacking the build |
 | `extract_dataset` | Unpacking the dataset |
 | `train` | LichtFeld Studio training |
+| `apt` | Build job: installing compilers and GUI libs |
+| `cmake` | Build job: installing CMake 3.30+ if needed |
+| `vcpkg` | Build job: cloning and bootstrapping vcpkg |
+| `clone` | Build job: cloning LichtFeld Studio |
+| `configure` | Build job: CMake configure |
+| `compile` | Build job: Ninja compile |
+| `pack` | Build job: packing `LichtFeld-Studio/` into tar.gz |
 | `report` | Writing `REPORT.md` and related files |
-| `upload` | Uploading PLYs, logs, and the report to FTP |
+| `upload` | Uploading outputs to FTP |
 | `done` | Finished on the pod (then it may self-terminate) |
 
 The dashboard subtitle shows `job.message` when set (progress text, `complete`, `completed (presumably)`, …), otherwise the phase name, then `last update: YYYY-MM-DD HH:MM:SS`. After SSH is lost that line also shows `(N connection errors)` since the last successful poll. SSH failures keep the last progress and append ` · connection error`; the raw SSH dump stays in the server log.
