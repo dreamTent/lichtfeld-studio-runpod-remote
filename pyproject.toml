@@ -21,4 +21,4 @@ build-backend = "setuptools.build_meta"
 include = ["lichtfeld_runpod*"]
 
 [tool.setuptools.package-data]
-lichtfeld_runpod = ["static/*"]
+lichtfeld_runpod = ["static/*", "scripts/*"]

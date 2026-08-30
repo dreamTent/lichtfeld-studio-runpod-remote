@@ -8,7 +8,7 @@ from .config import AppConfig
 from .host import restrict_secret_file, write_text_lf
 from .jobs import PRESUMED_COMPLETE_MESSAGE
 from .log import log
-from .remote_job import render_build_script, render_job_script
+from .remote_job import render_build_env, render_job_script, resolve_build_script
 from .runpod import RunpodClient, RunpodError, ssh_endpoint
 from .sshutil import Ssh, ensure_ed25519, ftp_check_due, write_ssh_config
 from .storage import remote_size, results_look_complete, verify_uploaded, write_netrc
@@ -149,6 +149,7 @@ def inject_and_start(
     cuda_arch: str = "",
     repo_url: str = "",
     archive_name: str = "",
+    app_workdir: Path | None = None,
 ) -> None:
     """Copy credentials + job script and start it under nohup. The pod owns the rest."""
     netrc = run_dir / "netrc"
@@ -165,7 +166,7 @@ def inject_and_start(
         ssh.put(sidecar, "/workspace/lichtfeld-config.json")
 
     if kind == "build":
-        script_text = render_build_script(
+        env_text = render_build_env(
             cfg,
             pod_id=pod_id,
             git_ref=git_ref,
@@ -173,16 +174,26 @@ def inject_and_start(
             repo_url=repo_url,
             archive_name=archive_name,
         )
+        env_path = run_dir / "build.env"
+        write_text_lf(env_path, env_text)
+        script_src = resolve_build_script(app_workdir)
+        local_script = run_dir / "remote_build.sh"
+        write_text_lf(local_script, script_src.read_text(encoding="utf-8"))
+        ssh.put(env_path, "/workspace/build.env")
+        ssh.put(local_script, "/workspace/remote_build.sh")
+        ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_build.sh")
+        remote_cmd = "/workspace/remote_build.sh"
     else:
         script_text = render_job_script(cfg, build_bytes, dataset_bytes, pod_id=pod_id)
-    local_script = run_dir / "remote_job.sh"
-    write_text_lf(local_script, script_text)
-    ssh.put(local_script, "/workspace/remote_job.sh")
-    ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_job.sh")
+        local_script = run_dir / "remote_job.sh"
+        write_text_lf(local_script, script_text)
+        ssh.put(local_script, "/workspace/remote_job.sh")
+        ssh.run("chmod 600 /root/.netrc /root/.runpod_api && chmod +x /workspace/remote_job.sh")
+        remote_cmd = "/workspace/remote_job.sh"
 
     log("job", "starting remote pipeline (autonomous)")
     ssh.run(
-        "nohup bash /workspace/remote_job.sh >> /workspace/logs/nohup.out 2>&1 & echo $! > /workspace/state/job.pid",
+        f"nohup bash {remote_cmd} >> /workspace/logs/nohup.out 2>&1 & echo $! > /workspace/state/job.pid",
         timeout=30,
     )
 

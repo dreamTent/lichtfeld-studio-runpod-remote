@@ -764,6 +764,7 @@ class JobManager:
                 cuda_arch=job.cuda_arch,
                 repo_url=job.repo_url,
                 archive_name=job.archive_name,
+                app_workdir=self.workdir,
             )
             self._update(job, injected=True, phase="running", last_ssh_ok=time.time(), message="build started")
             return

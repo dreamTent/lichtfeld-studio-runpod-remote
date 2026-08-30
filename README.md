@@ -101,6 +101,8 @@ Open **Create build**, pick GPU / cloud / git tag (default `v0.5.3`), and start.
 
 That is the same recipe that produced the working L40S archive. A binary is tied to one GPU family — rebuild if you change from L40S/Ada to something else. Compile takes on the order of 45 minutes. The dashboard job uses the same status circles as training; stages are listed in [STATES.md](STATES.md).
 
+The compile pipeline lives in `lichtfeld_runpod/scripts/remote_build.sh`. To swap it, put your own `remote_build.sh` next to `config.yaml`; that file is uploaded instead of the packaged default. Job parameters (git ref, CUDA arch, FTP paths, …) are written separately as `/workspace/build.env`.
+
 ### Datasets (`lichtfeld-datasets/`)
 
 Each archive is one COLMAP scene (or a folder that contains one). After extract, the runner looks for a directory with `sparse/` (COLMAP `cameras.bin` or `cameras.txt`) and an image folder named `images/`, `image/`, `imgs/`, or `rgb/`. Nested layouts are fine.

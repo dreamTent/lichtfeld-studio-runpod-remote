@@ -23,8 +23,13 @@ from lichtfeld_runpod.config import (
 )
 from lichtfeld_runpod.jobs import Job
 from lichtfeld_runpod.manager import JobManager
-from lichtfeld_runpod.orchestrate import format_progress
-from lichtfeld_runpod.remote_job import render_build_script
+from lichtfeld_runpod.orchestrate import format_progress, inject_and_start
+from lichtfeld_runpod.remote_job import (
+    PACKAGED_BUILD_SCRIPT,
+    render_build_env,
+    render_build_script,
+    resolve_build_script,
+)
 
 
 def _cfg(*, terminate: bool = True) -> AppConfig:
@@ -93,6 +98,15 @@ class BuildSpecTests(unittest.TestCase):
 
 class BuildScriptTests(unittest.TestCase):
     def test_compile_flags_and_self_delete(self) -> None:
+        env = render_build_env(
+            _cfg(),
+            pod_id="podabc",
+            git_ref="v0.5.3",
+            cuda_arch="89",
+            repo_url="https://github.com/MrNeRF/LichtFeld-Studio.git",
+            archive_name="lichtfeld-0.5.3-l40s-sm89.tar.gz",
+        )
+        script = PACKAGED_BUILD_SCRIPT.read_text(encoding="utf-8")
         text = render_build_script(
             _cfg(),
             pod_id="podabc",
@@ -101,23 +115,80 @@ class BuildScriptTests(unittest.TestCase):
             repo_url="https://github.com/MrNeRF/LichtFeld-Studio.git",
             archive_name="lichtfeld-0.5.3-l40s-sm89.tar.gz",
         )
-        self.assertIn("CMAKE_CUDA_ARCHITECTURES", text)
-        self.assertIn("89", text)
-        self.assertIn("GIT_REF='v0.5.3'", text)
-        self.assertIn('git clone --branch "$GIT_REF"', text)
-        self.assertIn("LichtFeld-Studio/build/LichtFeld-Studio", text)
-        self.assertIn("tar --exclude='LichtFeld-Studio/.git'", text)
-        self.assertIn("https://rest.runpod.io/v1/pods/${POD_ID}", text)
-        self.assertIn("X DELETE", text)
-        self.assertIn("TERMINATE=1", text)
-        self.assertIn("lichtfeld-builds/lichtfeld-0.5.3-l40s-sm89-260829.upload/", text)
-        self.assertIn("-RNFR lichtfeld-builds/lichtfeld-0.5.3-l40s-sm89-260829.upload", text)
-        self.assertIn("git clone https://github.com/microsoft/vcpkg.git", text)
-        self.assertNotIn("git clone --depth 1 https://github.com/microsoft/vcpkg.git", text)
-        self.assertIn("self_terminate", text)
-        self.assertIn("cmake-3.31.6-linux-x86_64.sh", text)
-        self.assertIn("REPORT.md", text)
+        self.assertIn("CMAKE_CUDA_ARCHITECTURES", script)
+        self.assertIn("CUDA_ARCH='89'", env)
+        self.assertIn("GIT_REF='v0.5.3'", env)
+        self.assertIn('git clone --branch "$GIT_REF"', script)
+        self.assertIn("LichtFeld-Studio/build/LichtFeld-Studio", script)
+        self.assertIn("tar --exclude='LichtFeld-Studio/.git'", script)
+        self.assertIn("https://rest.runpod.io/v1/pods/${POD_ID}", script)
+        self.assertIn("X DELETE", script)
+        self.assertIn("TERMINATE=1", env)
+        self.assertIn("lichtfeld-builds/lichtfeld-0.5.3-l40s-sm89-260829.upload/", env)
+        self.assertIn("-RNFR ${RESULT_STAGING}", script)
+        self.assertIn("git clone https://github.com/microsoft/vcpkg.git", script)
+        self.assertNotIn("git clone --depth 1 https://github.com/microsoft/vcpkg.git", script)
+        self.assertIn("self_terminate", script)
+        self.assertIn("cmake-3.31.6-linux-x86_64.sh", env)
+        self.assertIn("REPORT.md", script)
         self.assertNotIn("${{", text)
+        self.assertIn(env.strip(), text)
+
+    def test_override_script_next_to_config_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            workdir = Path(raw)
+            override = workdir / "remote_build.sh"
+            override.write_text("#!/usr/bin/env bash\necho override-pipeline\n", encoding="utf-8")
+            self.assertEqual(resolve_build_script(workdir), override)
+            self.assertEqual(resolve_build_script(None), PACKAGED_BUILD_SCRIPT)
+            text = render_build_script(
+                _cfg(),
+                git_ref="v0.5.3",
+                cuda_arch="89",
+                repo_url="https://github.com/MrNeRF/LichtFeld-Studio.git",
+                archive_name="x.tar.gz",
+                app_workdir=workdir,
+            )
+            self.assertIn("override-pipeline", text)
+            self.assertNotIn("CMAKE_CUDA_ARCHITECTURES", text)
+
+    def test_inject_uploads_env_and_script(self) -> None:
+        class RecSsh:
+            def __init__(self) -> None:
+                self.puts: list[tuple[str, str]] = []
+                self.runs: list[str] = []
+
+            def put(self, src: Path, dest: str) -> None:
+                self.puts.append((str(src), dest))
+
+            def run(self, cmd: str, **_k) -> None:
+                self.runs.append(cmd)
+
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            ssh = RecSsh()
+            inject_and_start(
+                ssh,
+                _cfg(),
+                run_dir,
+                "pod1",
+                None,
+                None,
+                kind="build",
+                git_ref="v0.5.3",
+                cuda_arch="89",
+                repo_url="https://github.com/MrNeRF/LichtFeld-Studio.git",
+                archive_name="lichtfeld-0.5.3-l40s-sm89.tar.gz",
+            )
+            dests = [d for _, d in ssh.puts]
+            self.assertIn("/workspace/build.env", dests)
+            self.assertIn("/workspace/remote_build.sh", dests)
+            self.assertNotIn("/workspace/remote_job.sh", dests)
+            self.assertTrue((run_dir / "build.env").is_file())
+            self.assertTrue((run_dir / "remote_build.sh").is_file())
+            joined = "\n".join(ssh.runs)
+            self.assertIn("bash /workspace/remote_build.sh", joined)
+            self.assertNotIn("remote_job.sh", joined)
 
     def test_compile_progress_label(self) -> None:
         msg = format_progress("compile", {"COMPILE": "[12/685]"}, "", None, None)
