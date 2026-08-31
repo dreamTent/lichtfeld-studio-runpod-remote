@@ -161,7 +161,7 @@ While a local dataset is uploading, **Abort upload** on the job detail stops the
 3. Copies the remote job script over SSH
 4. Downloads the LichtFeld build and dataset onto the pod from FTP
 5. Runs LichtFeld Studio headless (with your config file if you set one)
-6. Uploads PLYs, logs, and a short report to the result folder on FTP
+6. Uploads the output folder, logs, and a short report to the result folder on FTP
 7. Optionally downloads that folder to this machine
 8. Terminates the pod if that option is on
 
@@ -179,7 +179,8 @@ Progress prints in the terminal (download percent, training iteration / loss / s
 
 Under the job’s result folder on the server:
 
-- `splat_*.ply` (and copies under `output/`)
+- `splat_*.ply` (root-level copies)
+- the full `/workspace/output` tree under `output/`
 - `REPORT.md`
 - `train.log` (full LichtFeld log)
 - `pipeline.log`, `train_summary.txt`, `version.txt`, `output_files.txt`

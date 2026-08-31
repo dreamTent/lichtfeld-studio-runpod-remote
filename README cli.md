@@ -53,7 +53,8 @@ Downloads use **curl + FTP resume**, not Python `ftplib` (that client stalled ar
 
 Under `storage.result_dir`:
 
-- `splat_*.ply` (and copies under `output/`)
+- `splat_*.ply` (root-level copies)
+- the full `/workspace/output` tree under `output/`
 - `REPORT.md`
 - **`train.log`** (full LichtFeld log)
 - `pipeline.log`, `train_summary.txt`, `version.txt`, `output_files.txt`

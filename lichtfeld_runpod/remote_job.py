@@ -270,11 +270,11 @@ for f in "$OUTDIR"/*.ply "$REPORTDIR"/* "$LOGDIR/train.log" "$LOGDIR/pipeline.lo
   [[ -f "$f" ]] || continue
   upload_file "$f" "$(basename "$f")"
 done
-# nested ply / json
+# whole output tree under output/
 while IFS= read -r -d '' f; do
   rel="${{f#"$OUTDIR"/}}"
   upload_file "$f" "output/${{rel}}"
-done < <(find "$OUTDIR" -type f \\( -name '*.ply' -o -name '*.json' -o -name '*.resume' \\) -print0)
+done < <(find "$OUTDIR" -type f -print0)
 
 log "renaming $RESULT_STAGING -> $RESULT_DIR"
 {rename_results}
