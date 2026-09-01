@@ -80,6 +80,12 @@ class RemoteJobScriptTests(unittest.TestCase):
         self.assertIn("-RNTO lichtfeld-results/t", text)
         self.assertIn("renaming $RESULT_STAGING -> $RESULT_DIR", text)
 
+    def test_uploads_whole_output_tree(self) -> None:
+        text = render_job_script(_cfg(), 1, 1, pod_id="podabc")
+        self.assertIn('find "$OUTDIR" -type f -print0', text)
+        self.assertNotIn("-name '*.ply'", text)
+        self.assertIn('upload_file "$f" "output/${rel}"', text)
+
     def test_sftp_results_rename_uses_quote(self) -> None:
         from dataclasses import replace
 
