@@ -118,6 +118,10 @@
             <label class="inline"><input type="checkbox" name="gut" checked> GUT</label>
           </div>
         </fieldset>
+        <label>Custom LichtFeld parameters
+          <input name="extra_args" id="extra-args" placeholder="--export ply" autocomplete="off" spellcheck="false">
+        </label>
+        <p class="note">Appended to the headless LichtFeld Studio command. Separate from the settings override above.</p>
         <label class="inline"><input type="checkbox" name="auto_download"> Download results to this machine when done</label>
         <label class="inline"><input type="checkbox" name="terminate_when_done" checked> Pod self-terminates after FTP upload</label>
         <p class="form-error" id="job-error" hidden></p>
@@ -188,6 +192,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/app.js?v=14"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>

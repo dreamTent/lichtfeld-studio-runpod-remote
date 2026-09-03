@@ -54,6 +54,12 @@ class JobListingTests(unittest.TestCase):
         restored = Job.from_dict(data)
         self.assertEqual(restored.connection_errors, 0)
 
+    def test_extra_args_defaults_empty_on_old_records(self) -> None:
+        data = _job().to_dict()
+        data.pop("extra_args", None)
+        restored = Job.from_dict(data)
+        self.assertEqual(restored.extra_args, "")
+
     def test_snapshot_includes_next_check_countdown(self) -> None:
         from lichtfeld_runpod.manager import JobManager
 

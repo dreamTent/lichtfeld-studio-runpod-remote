@@ -14,7 +14,7 @@ from .buildspec import (
     normalize_git_ref,
     normalize_repo_url,
 )
-from .config import AppConfig, ConfigError, config_for_job, load_app_config
+from .config import AppConfig, ConfigError, config_for_job, load_app_config, parse_extra_args
 from .host import open_in_file_manager
 from .jobs import PRESUMED_COMPLETE_MESSAGE, Job, JobStore, default_job_name, new_id
 from .log import log
@@ -112,6 +112,16 @@ class JobManager:
             dataset_source = str(spec.get("dataset_source") or "ftp")
             dataset_archive = str(spec.get("dataset_archive") or "")
             dataset_local = str(spec.get("dataset_local") or "")
+        extra_raw = spec.get("extra_args") or ""
+        if isinstance(extra_raw, list):
+            extra_args = " ".join(str(a) for a in extra_raw if str(a) != "").strip()
+        else:
+            extra_args = str(extra_raw).strip()
+        if extra_args:
+            try:
+                parse_extra_args(extra_args)
+            except ConfigError as e:
+                raise ValueError(str(e)) from e
         job = Job(
             id=job_id,
             name=name,
@@ -129,6 +139,7 @@ class JobManager:
             max_cap=spec.get("max_cap"),
             enable_sparsity=spec.get("enable_sparsity"),
             gut=spec.get("gut"),
+            extra_args=extra_args,
             image=str(spec.get("image") or "").strip(),
             config_local=str(spec.get("config_local") or "").strip(),
             upload_as_is=bool(spec.get("upload_as_is", False)),
@@ -582,6 +593,7 @@ class JobManager:
             max_cap=job.max_cap,
             enable_sparsity=job.enable_sparsity,
             gut=job.gut,
+            extra_args=job.extra_args,
             terminate_when_done=job.terminate_when_done,
         )
 

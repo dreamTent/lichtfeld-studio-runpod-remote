@@ -149,6 +149,7 @@ Open **New job** and choose:
 - Or a **separate local JSON config** uploaded to the pod (used instead of a config inside the dataset archive)
 - Result folder on FTP
 - Optional **Override LichtFeld settings** (max Gaussians, sparsity, GUT). Leave this off to use only the LichtFeld config file and the binary defaults
+- Optional **Custom LichtFeld parameters** appended to the headless command (for example `--export ply`). Separate from the settings override
 - Whether to download results to this machine when done
 - Whether the pod should terminate after the FTP upload (on by default)
 

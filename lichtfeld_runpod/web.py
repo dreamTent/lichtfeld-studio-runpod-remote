@@ -68,6 +68,7 @@ class JobIn(BaseModel):
     max_cap: int | None = None
     enable_sparsity: bool | None = None
     gut: bool | None = None
+    extra_args: str = ""
     git_ref: str = ""
     cuda_arch: str = ""
     repo_url: str = ""

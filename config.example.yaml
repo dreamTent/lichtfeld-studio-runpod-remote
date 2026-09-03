@@ -52,6 +52,8 @@ lichtfeld:
   gut: true
   headless: true
   extra_args: []
+  # Extra CLI tokens passed through to LichtFeld Studio, e.g. ["--export", "ply"]
+  # The dashboard has a separate text field for the same flags (e.g. --export ply).
   # Optional overrides (omit or leave null to use the binary/config defaults):
   # iterations: 30000
   # strategy: mrnf

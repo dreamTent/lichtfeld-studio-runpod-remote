@@ -4,11 +4,13 @@ from pathlib import Path
 
 from lichtfeld_runpod.config import (
     AppConfig,
+    ConfigError,
     LichtfeldConfig,
     RunpodConfig,
     SshConfig,
     StorageConfig,
     config_for_job,
+    parse_extra_args,
     peek_runpod_image,
 )
 from lichtfeld_runpod.localfs import ensure_datasets_dir, is_allowed_path, list_local_dir
@@ -26,6 +28,8 @@ class StaticFormTests(unittest.TestCase):
         self.assertIn('id="job-start"', html)
         self.assertIn('id="job-image"', html)
         self.assertIn('id="override-lichtfeld"', html)
+        self.assertIn('id="extra-args"', html)
+        self.assertGreater(html.index('id="extra-args"'), html.index('id="override-lichtfeld"'))
         self.assertIn('id="pick-folder"', html)
         self.assertIn('id="pick-archive"', html)
         self.assertIn('id="pick-config"', html)
@@ -46,6 +50,7 @@ class StaticFormTests(unittest.TestCase):
         self.assertIn("local_results_ready", js)
         self.assertIn('kind: "build"', js)
         self.assertIn("submitBuild", js)
+        self.assertIn("form.extra_args.value", js)
 
 
 class DatasetsDirTests(unittest.TestCase):
@@ -119,6 +124,26 @@ class ConfigOverlayTests(unittest.TestCase):
         self.assertIsNone(cfg.lichtfeld.max_cap)
         self.assertIsNone(cfg.lichtfeld.enable_sparsity)
         self.assertIsNone(cfg.lichtfeld.gut)
+
+    def test_extra_args_string_overlay(self) -> None:
+        cfg = config_for_job(self._base(), extra_args="--export ply")
+        self.assertEqual(cfg.lichtfeld.extra_args, ["--export", "ply"])
+
+    def test_empty_extra_args_clears_yaml(self) -> None:
+        base = self._base()
+        from dataclasses import replace
+
+        base = replace(base, lichtfeld=replace(base.lichtfeld, extra_args=["--from-yaml"]))
+        cfg = config_for_job(base, extra_args="")
+        self.assertEqual(cfg.lichtfeld.extra_args, [])
+
+    def test_parse_extra_args(self) -> None:
+        self.assertEqual(parse_extra_args("--export ply"), ["--export", "ply"])
+        self.assertEqual(parse_extra_args(["--export", "ply"]), ["--export", "ply"])
+        self.assertEqual(parse_extra_args(""), [])
+        self.assertEqual(parse_extra_args(None), [])
+        with self.assertRaises(ConfigError):
+            parse_extra_args('--export "unterminated')
 
     def test_image_override(self) -> None:
         cfg = config_for_job(self._base(), image="custom/image:tag")

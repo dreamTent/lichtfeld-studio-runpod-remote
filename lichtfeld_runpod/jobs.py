@@ -43,6 +43,7 @@ class Job:
     max_cap: int | None
     enable_sparsity: bool | None
     gut: bool | None
+    extra_args: str = ""
     image: str = ""
     config_local: str = ""
     upload_as_is: bool = False

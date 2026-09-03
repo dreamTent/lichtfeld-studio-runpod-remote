@@ -32,7 +32,7 @@ Fill in `.env` and `config.yaml` first. An SSH key is created at `~/.ssh/runpod_
 | Dataset config | `lichtfeld.config` | JSON **inside** the extracted scene (relative to the COLMAP root). Empty = no `--config` |
 | Max Gaussians | `lichtfeld.max_cap` | `--max-cap` |
 | Sparsity / GUT | `lichtfeld.enable_sparsity`, `lichtfeld.gut` | CLI flags |
-| Extra flags | `lichtfeld.extra_args` | List of extra CLI tokens |
+| Extra flags | `lichtfeld.extra_args` | Extra CLI tokens (dashboard: **Custom LichtFeld parameters**, e.g. `--export ply`) |
 | Kill pod when done | `job.terminate_when_done` | Default true |
 
 The scene root is detected automatically: a directory that contains `images/` and `sparse/` (COLMAP `cameras.txt` / `cameras.bin`).

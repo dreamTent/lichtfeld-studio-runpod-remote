@@ -110,6 +110,18 @@ class RemoteJobScriptTests(unittest.TestCase):
         self.assertNotIn("--gut", text)
         self.assertIn("--headless", text)
 
+    def test_extra_args_appended_to_command(self) -> None:
+        from dataclasses import replace
+
+        cfg = _cfg()
+        cfg = replace(
+            cfg,
+            lichtfeld=replace(cfg.lichtfeld, extra_args=["--export", "ply"]),
+        )
+        text = render_job_script(cfg, 1, 1, pod_id="podabc")
+        self.assertIn("'--export' 'ply'", text)
+        self.assertIn("--headless", text)
+
     def test_prefers_uploaded_sidecar_config(self) -> None:
         text = render_job_script(_cfg(), 1, 1, pod_id="podabc")
         self.assertIn("/workspace/lichtfeld-config.json", text)

@@ -254,6 +254,7 @@ function renderDetail() {
     } else {
       kv.push(["Build", job.build_archive || "—"]);
       kv.push(["Dataset", job.dataset_archive || job.dataset_local || "—"]);
+      if (job.extra_args) kv.push(["Extra flags", job.extra_args]);
     }
     kv.push(["Results", job.result_dir || "—"]);
     kv.push(["Download", job.auto_download ? "local + FTP" : "FTP only"]);
@@ -679,6 +680,7 @@ async function submitJob() {
     max_cap: override && form.max_cap.value ? Number(form.max_cap.value) : null,
     enable_sparsity: override ? form.enable_sparsity.checked : null,
     gut: override ? form.gut.checked : null,
+    extra_args: form.extra_args.value.trim(),
   };
   try {
     const job = await api("/api/jobs", {

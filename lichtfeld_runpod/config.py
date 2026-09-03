@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,23 @@ class AppConfig:
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
 
+def parse_extra_args(value: Any) -> list[str]:
+    """Split extra LichtFeld CLI tokens from a string or list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(a) for a in value if str(a) != ""]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            return shlex.split(text, posix=True)
+        except ValueError as e:
+            raise ConfigError(f"invalid extra LichtFeld parameters: {e}") from e
+    raise ConfigError("lichtfeld.extra_args must be a string or a list of strings")
+
+
 def load_config(config_path: Path, env_path: Path | None = None) -> AppConfig:
     if env_path is None:
         env_path = config_path.parent / ".env"
@@ -153,9 +171,7 @@ def load_config(config_path: Path, env_path: Path | None = None) -> AppConfig:
     if gpu_count != 1:
         raise ConfigError("gpu_count must be 1 (one dedicated GPU, not a MIG slice or pack)")
 
-    extra = lf.get("extra_args") or []
-    if not isinstance(extra, list):
-        raise ConfigError("lichtfeld.extra_args must be a list of strings")
+    extra = parse_extra_args(lf.get("extra_args"))
 
     cfg = AppConfig(
         job_name=str(job.get("name") or "lichtfeld-job"),
@@ -190,7 +206,7 @@ def load_config(config_path: Path, env_path: Path | None = None) -> AppConfig:
             enable_sparsity=bool(lf.get("enable_sparsity", True)),
             gut=bool(lf.get("gut", True)),
             headless=bool(lf.get("headless", True)),
-            extra_args=[str(a) for a in extra],
+            extra_args=extra,
             iterations=int(lf["iterations"]) if lf.get("iterations") not in (None, "") else None,
             strategy=str(lf["strategy"]) if lf.get("strategy") else None,
         ),
@@ -255,6 +271,8 @@ def config_for_job(base: AppConfig, **overrides: Any) -> AppConfig:
     if "gut" in overrides:
         val = overrides["gut"]
         lf_kw["gut"] = None if val is None else bool(val)
+    if "extra_args" in overrides:
+        lf_kw["extra_args"] = parse_extra_args(overrides["extra_args"])
     if lf_kw:
         lichtfeld = replace(lichtfeld, **lf_kw)
     return replace(

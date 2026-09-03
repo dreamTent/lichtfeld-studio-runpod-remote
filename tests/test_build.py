@@ -247,6 +247,36 @@ class BuildSubmitTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     mgr.submit({"kind": "train", "gpu": "NVIDIA L40S"})
 
+    def test_submit_stores_extra_args(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            with patch.object(JobManager, "_spawn"):
+                job = mgr.submit(
+                    {
+                        "kind": "train",
+                        "gpu": "NVIDIA L40S",
+                        "build_archive": "b.tar.gz",
+                        "dataset_archive": "d.tar",
+                        "extra_args": "--export ply",
+                    }
+                )
+            self.assertEqual(job.extra_args, "--export ply")
+
+    def test_submit_rejects_unbalanced_extra_args(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            mgr = JobManager(Path(raw))
+            with patch.object(JobManager, "_spawn"):
+                with self.assertRaises(ValueError):
+                    mgr.submit(
+                        {
+                            "kind": "train",
+                            "gpu": "NVIDIA L40S",
+                            "build_archive": "b.tar.gz",
+                            "dataset_archive": "d.tar",
+                            "extra_args": '--export "unterminated',
+                        }
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
